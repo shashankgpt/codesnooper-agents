@@ -14,6 +14,11 @@ image = (
         "langchain-google-genai>=2.0.0",
         "langgraph>=0.2.0",
         "sentry-sdk[fastapi]>=2.14.0",
+        "langchain-mistralai>=0.2.0",
+        "langsmith>=0.3.0",
+        "pypdf>=4.0.0",
+        "beautifulsoup4>=4.12.0",
+        "httpx>=0.27.0",
     )
     .add_local_python_source("app")
 )
