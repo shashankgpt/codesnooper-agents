@@ -2,9 +2,14 @@ import logging
 import re
 import time
 
+from app.agents.linkedin_scraper import (
+    fetch_linkedin_raw_data,
+    map_linkedin_dict_to_resume_schema,
+)
 from app.agents.resume_parser_agent import (
     ResumeParserState,
     build_resume_parser_graph,
+    classify_url,
     fetch_source_text,
 )
 from app.config import Settings
@@ -46,8 +51,54 @@ class ResumeController:
         )
 
         try:
-            # 1. Fetch raw text before entering LangGraph
-            raw_text, url_type = await fetch_source_text(str(request.url))
+            url_str = str(request.url)
+            url_type = classify_url(url_str)
+            requested_model = (request.model or "auto").lower().strip()
+
+            # Determine whether to use direct Python mapping or AI pipeline
+            use_python_mapping = (
+                (requested_model in ("auto", "python", "python-mapping", "mapping") and url_type == "linkedin")
+                or (requested_model in ("python", "python-mapping", "mapping"))
+            )
+
+            if use_python_mapping:
+                if url_type != "linkedin":
+                    raise ValueError(
+                        f"Python mapping is only available for structured LinkedIn URLs, but detected '{url_type}'. "
+                        "Please specify model='gemini' or model='mistral' to use AI parsing with PII protection."
+                    )
+
+                # Direct Python mapping for LinkedIn profiles (instant, 100% accurate, zero-LLM, NO PIIVault)
+                logger.info("Processing LinkedIn profile via deterministic Python mapping (zero-LLM, NO PIIVault)")
+                scrape_start = time.perf_counter()
+                profile_dict = await fetch_linkedin_raw_data(url_str)
+                scrape_elapsed = time.perf_counter() - scrape_start
+
+                map_start = time.perf_counter()
+                resume = map_linkedin_dict_to_resume_schema(profile_dict, url_str)
+                map_elapsed = time.perf_counter() - map_start
+
+                logger.info(
+                    "LinkedIn profile fetched in %.2fs (Bright Data network scrape) and mapped in %.4fs (Python in-memory mapping)",
+                    scrape_elapsed,
+                    map_elapsed,
+                )
+                return self._create_response(
+                    start_time=start_time,
+                    success=True,
+                    url=url_str,
+                    url_type="linkedin",
+                    model_used="python-mapping",
+                    resume=resume,
+                    error=None,
+                )
+
+            # --- AI Pipeline with PIIVault ---
+            ai_model = "gemini" if requested_model == "auto" else request.model
+            logger.info("Processing resume via AI agent ('%s') with PIIVault protection", ai_model)
+
+            # 1. Fetch raw text before entering LangGraph for PDFs, HTML, or AI-requested LinkedIn profiles
+            raw_text, url_type = await fetch_source_text(url_str)
 
             # 2. Scrub PII immediately - vault is held STRICTLY in controller memory
             anonymized_text, vault = anonymize_content(raw_text)
@@ -57,17 +108,17 @@ class ResumeController:
                 "url": sanitized_url,
                 "url_type": url_type,
                 "anonymized_content": anonymized_text,
-                "model": request.model,
+                "model": ai_model,
                 "prompt_version": "v1",
             }
 
             # Run configuration with sanitized metadata so no PII leaks to LangSmith
             run_config = {
-                "run_name": f"ResumeParserWorkflow-{request.model}",
-                "tags": ["resume-parser", request.model, self._settings.app_env],
+                "run_name": f"ResumeParserWorkflow-{ai_model}",
+                "tags": ["resume-parser", ai_model, self._settings.app_env],
                 "metadata": {
                     "url_type": url_type,
-                    "model": request.model,
+                    "model": ai_model,
                 },
             }
             result = await self._graph.ainvoke(initial_state, config=run_config)

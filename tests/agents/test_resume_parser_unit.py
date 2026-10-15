@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.resume_parser_agent import (
@@ -15,6 +16,7 @@ from app.models.resume import (
     Education,
     Experience,
     Project,
+    ResumeParseRequest,
     ResumeParseResponse,
     ResumeSchema,
 )
@@ -200,9 +202,9 @@ def test_pii_vault_restores_naked_and_bracketed_placeholders() -> None:
     from app.core.pii_anonymizer import PIIVault
 
     vault = PIIVault()
-    vault.register("EMAIL", "shashank@example.com")
-    vault.register("PHONE", "+91 9876543210")
-    vault.register("NAME", "Shashank Gupta")
+    vault.register("EMAIL", "alex.morgan@example.com")
+    vault.register("PHONE", "+1 415-555-2671")
+    vault.register("NAME", "Alex Morgan")
 
     # Simulate LLM output where email and phone have brackets stripped or leading +
     raw_resume = ResumeSchema(
@@ -212,9 +214,9 @@ def test_pii_vault_restores_naked_and_bracketed_placeholders() -> None:
     )
 
     restored = vault.restore_resume(raw_resume)
-    assert restored.full_name == "Shashank Gupta"
-    assert restored.email == "shashank@example.com"
-    assert restored.phone == "+91 9876543210"
+    assert restored.full_name == "Alex Morgan"
+    assert restored.email == "alex.morgan@example.com"
+    assert restored.phone == "+1 415-555-2671"
 
 
 def test_pii_vault_fails_on_unrestored_residual_placeholder() -> None:
@@ -224,11 +226,11 @@ def test_pii_vault_fails_on_unrestored_residual_placeholder() -> None:
 
     vault = PIIVault()
     # Vault only knows EMAIL_1
-    vault.register("EMAIL", "shashank@example.com")
+    vault.register("EMAIL", "alex.morgan@example.com")
 
     # LLM hallucinated or returned an unrestorable placeholder PII_EMAIL_99
     unrestored_resume = ResumeSchema(
-        full_name="Shashank Gupta",
+        full_name="Alex Morgan",
         email="PII_EMAIL_99",
         phone="PII_PHONE_88",
     )
@@ -246,25 +248,189 @@ def test_pii_vault_fails_on_unrestored_residual_placeholder() -> None:
 def test_resume_schema_normalizes_dummy_phone_numbers() -> None:
     """Verify ResumeSchema discards dummy placeholder phone numbers like +91-9999999999."""
     resume_dummy_9s = ResumeSchema(
-        full_name="Shashank Gupta",
-        email="shashankgpt270@gmail.com",
+        full_name="Alex Morgan",
+        email="alex.morgan@example.com",
         phone="+91-9999999999",
     )
     assert resume_dummy_9s.phone is None
 
     resume_dummy_0s = ResumeSchema(
-        full_name="Shashank Gupta",
-        email="shashankgpt270@gmail.com",
+        full_name="Alex Morgan",
+        email="alex.morgan@example.com",
         phone="+91-0000000000",
     )
     assert resume_dummy_0s.phone is None
 
     resume_valid = ResumeSchema(
-        full_name="Shashank Gupta",
-        email="shashankgpt270@gmail.com",
-        phone="+91-9876543210",
+        full_name="Alex Morgan",
+        email="alex.morgan@example.com",
+        phone="+1 415-555-2671",
     )
-    assert resume_valid.phone == "+91-9876543210"
+    assert resume_valid.phone == "+1 415-555-2671"
+
+
+def test_map_linkedin_dict_to_resume_schema() -> None:
+    """Verify map_linkedin_dict_to_resume_schema accurately maps Bright Data JSON to ResumeSchema."""
+    from app.agents.linkedin_scraper import map_linkedin_dict_to_resume_schema
+
+    mock_profile = {
+        "name": "Alex Morgan",
+        "position": "Lead Software Engineer",
+        "city": "Bengaluru, Karnataka, India",
+        "about": "Lead Engineer with 10+ years experience. Contact: alex.morgan@example.com",
+        "current_company": {"name": "TechCorp Solutions"},
+        "experience": [
+            {
+                "title": "Lead Software Engineer",
+                "company": "TechCorp Solutions",
+                "location": "Bengaluru",
+                "start_date": "2021-03",
+                "end_date": "Present",
+                "description": "- Led backend architecture\n- Reduced latency",
+            },
+            {
+                "title": "Senior Engineer",
+                "company": "Legacy Systems Ltd",
+                "start_date": "2018-01",
+                "end_date": "2021-02",
+                "description": "API development",
+            },
+        ],
+        "education": [
+            {
+                "title": "State University of Technology",
+                "degree": "B.Tech",
+                "field_of_study": "Computer Science",
+                "start_year": "2012",
+                "end_year": "2016",
+            }
+        ],
+        "certifications": [
+            {
+                "title": "AWS Solutions Architect",
+                "subtitle": "Amazon Web Services",
+                "credential_url": "https://credly.com/badge/123",
+            }
+        ],
+        "projects": [
+            {
+                "title": "Platform API",
+                "description": "Multi-tenant auth service",
+                "url": "https://github.com/example/api",
+            }
+        ],
+        "skills": ["Python", "FastAPI", "React", "AWS"],
+        "languages": [{"title": "English"}, {"title": "Hindi"}],
+        "bio_links": [{"title": "Portfolio", "link": "https://alexmorgan.dev"}],
+        "url": "https://www.linkedin.com/in/alexmorgan",
+    }
+
+    resume = map_linkedin_dict_to_resume_schema(mock_profile)
+
+    assert resume.full_name == "Alex Morgan"
+    assert resume.email == "alex.morgan@example.com"
+    assert resume.location == "Bengaluru, Karnataka, India"
+    assert len(resume.experience) == 2
+    assert resume.experience[0].company == "TechCorp Solutions"
+    assert resume.experience[0].is_current is True
+    assert len(resume.education) == 1
+    assert "State University" in (resume.education[0].institution or "")
+    assert len(resume.certificates) == 1
+    assert "AWS Solutions Architect" in (resume.certificates[0].name or "")
+    assert len(resume.projects) == 1
+    assert "Python" in resume.skills
+    assert "English" in resume.languages
+    assert resume.portfolio_url == "https://alexmorgan.dev"
+    assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
+
+
+@pytest.mark.asyncio
+async def test_resume_controller_routes_linkedin_to_python_mapping() -> None:
+    """Verify ResumeController routes LinkedIn URLs to python-mapping without LLM."""
+    from unittest.mock import AsyncMock, patch
+    from app.controllers.resume_controller import ResumeController
+
+    mock_profile = {
+        "name": "Jane Developer",
+        "city": "Austin, TX",
+        "skills": ["Python", "Docker"],
+        "experience": [{"title": "Engineer", "company": "Acme Inc"}],
+    }
+
+    controller = ResumeController(get_settings())
+    req = ResumeParseRequest(url="https://www.linkedin.com/in/janedev/")
+
+    with patch(
+        "app.controllers.resume_controller.fetch_linkedin_raw_data",
+        new_callable=AsyncMock,
+    ) as mock_fetch:
+        mock_fetch.return_value = mock_profile
+
+        response = await controller.parse_resume(req)
+
+        assert response.success is True
+        assert response.model_used == "python-mapping"
+        assert response.url_type == "linkedin"
+        assert response.resume is not None
+        assert response.resume.full_name == "Jane Developer"
+        assert response.response_time is not None
+
+
+@pytest.mark.asyncio
+async def test_resume_controller_routes_linkedin_to_ai_with_pii_vault() -> None:
+    """Verify ResumeController routes to AI agent and uses PIIVault when model='gemini' is requested."""
+    from unittest.mock import AsyncMock, patch
+    from app.controllers.resume_controller import ResumeController
+
+    controller = ResumeController(get_settings())
+    req = ResumeParseRequest(url="https://www.linkedin.com/in/janedev/", model="gemini")
+
+    mock_raw_text = "Name: Jane Developer\nEmail: jane@example.com\nExperience: Acme Inc"
+    mock_ai_resume = ResumeSchema(
+        full_name="{{PII_NAME_2}}",
+        email="{{PII_EMAIL_1}}",
+        experience=[Experience(company="Acme Inc", title="Staff Engineer")],
+    )
+
+    with patch(
+        "app.controllers.resume_controller.fetch_source_text",
+        new_callable=AsyncMock,
+    ) as mock_fetch, patch.object(
+        controller._graph,
+        "ainvoke",
+        new_callable=AsyncMock,
+    ) as mock_invoke:
+        mock_fetch.return_value = (mock_raw_text, "linkedin")
+        mock_invoke.return_value = {
+            "resume": mock_ai_resume,
+            "error": None,
+            "model_used": "gemini",
+        }
+
+        response = await controller.parse_resume(req)
+
+        assert response.success is True
+        assert response.model_used == "gemini"
+        assert response.url_type == "linkedin"
+        assert response.resume is not None
+        # Assert PIIVault properly restored real values
+        assert response.resume.full_name == "Jane Developer"
+        assert response.resume.email == "jane@example.com"
+
+
+@pytest.mark.asyncio
+async def test_resume_controller_rejects_python_mapping_for_non_linkedin_urls() -> None:
+    """Verify ResumeController rejects model='python-mapping' for PDF and HTML URLs."""
+    from app.controllers.resume_controller import ResumeController
+
+    controller = ResumeController(get_settings())
+    req = ResumeParseRequest(url="https://example.com/resume.pdf", model="python-mapping")
+
+    response = await controller.parse_resume(req)
+
+    assert response.success is False
+    assert "Python mapping is only available for structured LinkedIn URLs" in (response.error or "")
+
 
 
 

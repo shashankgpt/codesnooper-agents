@@ -147,8 +147,13 @@ class ResumeParseRequest(BaseModel):
         description="URL to the resume (direct PDF link, LinkedIn profile, or resume webpage)"
     )
     model: str = Field(
-        default="gemini",
-        description="LLM provider/model to use for extraction: 'gemini' (default, using gemini-3.5-flash-lite) or 'mistral'",
+        default="auto",
+        description=(
+            "Extraction model/method: 'auto' (uses python-mapping for LinkedIn, gemini for PDF/HTML), "
+            "'python-mapping' (instant deterministic mapping, zero-LLM, no PII vault), "
+            "'gemini' (AI extraction with gemini-3.5-flash-lite + PIIVault protection), "
+            "or 'mistral' (AI extraction + PIIVault protection)"
+        ),
     )
 
 
