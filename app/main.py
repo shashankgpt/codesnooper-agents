@@ -1,33 +1,23 @@
-import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
+
+from app.config import configure_tracing, get_settings
+
+# Configure LangSmith tracing immediately before importing routers/agents
+settings = get_settings()
+configure_tracing(settings)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from app.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.middleware import TimingMiddleware, TokenAuthMiddleware
 from app.core.sentry import init_sentry
 from app.repositories.firebase_client import firebase_service
 from app.views.health import router as health_router
 from app.views.resume import router as resume_router
-
-settings = get_settings()
-
-# Configure LangSmith tracing immediately on module load
-if settings.langsmith_api_key and settings.langsmith_tracing:
-    os.environ["LANGCHAIN_TRACING_V2"] = "true"
-    os.environ["LANGSMITH_TRACING"] = "true"
-    os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
-    os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
-    os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
-    os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
-    if settings.langsmith_endpoint:
-        os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
-        os.environ["LANGCHAIN_ENDPOINT"] = settings.langsmith_endpoint
 
 
 @asynccontextmanager

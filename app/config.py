@@ -86,8 +86,77 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
 
+    @property
+    def langsmith_uses_agent_address(self) -> bool:
+        """Use the agent/environment destination for configured production traces."""
+        return bool(
+            self.is_production
+            and self.langsmith_agent_id.strip()
+            and self.langsmith_agent_environment.strip()
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:
     """Cached settings singleton for dependency injection."""
     return Settings()
+
+
+def configure_tracing(settings: Settings | None = None) -> None:
+    """Configure LangSmith / LangChain tracing and resolve destination conflicts.
+
+    In LangSmith (v0.3+), having both a Project (LANGSMITH_PROJECT) and an Agent Address
+    (LANGSMITH_AGENT_ID / LANGSMITH_AGENT_ENVIRONMENT) in the environment causes an
+    EnvAddressError collision, dropping all trace events.
+
+    This function sets standard LangSmith/LangChain environment flags and cleans up
+    conflicting agent address variables when project-based tracing is configured.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    if not (settings.langsmith_api_key and settings.langsmith_tracing):
+        return
+
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
+
+    if settings.langsmith_endpoint:
+        os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+        os.environ["LANGCHAIN_ENDPOINT"] = settings.langsmith_endpoint
+
+    # Project and agent/environment destinations are mutually exclusive.
+    if settings.langsmith_uses_agent_address:
+        os.environ["LANGSMITH_AGENT_ID"] = settings.langsmith_agent_id
+        os.environ["LANGSMITH_AGENT_ENVIRONMENT"] = settings.langsmith_agent_environment
+        os.environ.pop("LANGSMITH_PROJECT", None)
+        os.environ.pop("LANGCHAIN_PROJECT", None)
+    elif settings.langsmith_project:
+        os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
+        os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+        os.environ.pop("LANGSMITH_AGENT_ID", None)
+        os.environ.pop("LANGSMITH_AGENT_ENVIRONMENT", None)
+    else:
+        os.environ.pop("LANGSMITH_PROJECT", None)
+        os.environ.pop("LANGCHAIN_PROJECT", None)
+        os.environ.pop("LANGSMITH_AGENT_ID", None)
+        os.environ.pop("LANGSMITH_AGENT_ENVIRONMENT", None)
+
+
+def flush_tracing() -> None:
+    """Flush pending LangSmith trace events before returning responses in serverless runtimes.
+
+    In serverless platforms like Modal, containers freeze immediately after an ASGI response
+    completes. Explicitly flushing the client guarantees that asynchronous trace batches
+    are transmitted before container suspension.
+    """
+    try:
+        from langchain_core.tracers.langchain import get_client
+
+        client = get_client()
+        client.flush()
+    except Exception:
+        # Flushing should never crash request fulfillment
+        pass

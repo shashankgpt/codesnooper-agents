@@ -2,6 +2,8 @@ import logging
 import re
 import time
 
+from langsmith import tracing_context
+
 from app.agents.linkedin_scraper import (
     fetch_linkedin_raw_data,
     map_linkedin_dict_to_resume_schema,
@@ -12,7 +14,7 @@ from app.agents.resume_parser_agent import (
     classify_url,
     fetch_source_text,
 )
-from app.config import Settings
+from app.config import Settings, flush_tracing
 from app.core.pii_anonymizer import PIIVault, anonymize_content
 from app.models.resume import (
     ResumeParseRequest,
@@ -121,7 +123,20 @@ class ResumeController:
                     "model": ai_model,
                 },
             }
-            result = await self._graph.ainvoke(initial_state, config=run_config)
+            try:
+                trace_destination = (
+                    {}
+                    if self._settings.langsmith_uses_agent_address
+                    else {"project_name": self._settings.langsmith_project}
+                )
+                with tracing_context(
+                    enabled=bool(self._settings.langsmith_api_key and self._settings.langsmith_tracing),
+                    **trace_destination,
+                ):
+                    result = await self._graph.ainvoke(initial_state, config=run_config)
+            finally:
+                if self._settings.langsmith_api_key and self._settings.langsmith_tracing:
+                    flush_tracing()
 
             error = result.get("error")
             anonymized_resume = result.get("resume")

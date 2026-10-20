@@ -144,10 +144,23 @@ modal secret create codesnooper-secrets \
   FIREBASE_DATABASE_URL="https://your-project.firebaseio.com" \
   GOOGLE_APPLICATION_CREDENTIALS_JSON='{"type":"service_account",...}' \
   GOOGLE_API_KEY="your-gemini-api-key" \
+  LANGSMITH_API_KEY="your-langsmith-api-key" \
+  LANGSMITH_TRACING="true" \
+  LANGSMITH_AGENT_ID="codesnooper-agent" \
+  LANGSMITH_AGENT_ENVIRONMENT="production" \
+  LANGSMITH_ENDPOINT="https://api.smith.langchain.com" \
   SENTRY_DSN="https://your-key@o123456.ingest.us.sentry.io/your-project-id" \
   SENTRY_TRACES_SAMPLE_RATE="1.0" \
   APP_ENV="production"
 ```
+
+LangSmith settings in the local `.env` file are not available in Modal. The
+`codesnooper-secrets` secret must contain `LANGSMITH_API_KEY`; tracing is only
+enabled when this key is present. Set `LANGSMITH_TRACING` to `true` and keep
+`LANGSMITH_ENDPOINT` set to the endpoint for your LangSmith region. In
+production, set `LANGSMITH_AGENT_ID` and `LANGSMITH_AGENT_ENVIRONMENT` to route
+traces to that agent environment. Do not set `LANGSMITH_PROJECT` at the same
+time. Update the secret and redeploy after changing these values.
 
 > [!TIP]
 > In cloud serverless platforms like Modal, providing `GOOGLE_APPLICATION_CREDENTIALS_JSON` containing the raw JSON content is preferred over committing a JSON file to disk.
