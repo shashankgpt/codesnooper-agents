@@ -15,4 +15,5 @@ class HealthResponse(BaseModel):
     status: str = Field(description="Overall service health status")
     firebase_connected: bool = Field(description="Whether Firebase/Firestore is accessible")
     gemini_connected: bool = Field(description="Whether Google Gemini API is accessible")
+    langsmith_connected: bool = Field(description="Whether LangSmith API is accessible")
     gemini_model: str | None = Field(default=None, description="Active Gemini model used")
