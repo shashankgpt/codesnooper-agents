@@ -1,14 +1,25 @@
+import os
 from functools import lru_cache
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Modal sets MODAL_ENVIRONMENT inside all containers.
+# When running on Modal, secrets are injected as OS env vars directly —
+# we skip loading .env so there's no confusion with stale local values.
+_RUNNING_ON_MODAL = "MODAL_ENVIRONMENT" in os.environ
+
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
+
+    - Local development: values are read from the .env file.
+    - Modal cloud: values are injected by the `codesnooper-secrets` Modal
+      Secret and read directly from the OS environment (no .env file).
+    """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None if _RUNNING_ON_MODAL else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
