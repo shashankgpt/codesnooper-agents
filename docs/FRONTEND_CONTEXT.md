@@ -132,15 +132,15 @@ x-user-email: <user_email>
 | `portfolios` | Public portfolio pages | Frontend only |
 | `site_settings` | Global app configuration | Frontend only |
 
-### Firebase Realtime Database (Agents-Managed)
+### Firebase Firestore (Agents-Managed)
 
 | Path | Description | Used By |
 |:---|:---|:---|
-| `/agent_tasks/*` | Background agent job status | Agents backend only |
+| `resume_parse_jobs/{job_id}` | Background resume parse job status and result | Agents backend, polled by frontend |
 
-> **Note:** The frontend uses **Firestore** while the agents backend uses
-> **Realtime Database**. They are separate Firebase products within the same
-> Firebase project — no data conflicts occur.
+> **Note:** Both the frontend and agents backend use **Firestore** in the same
+> Firebase project. The agents store temporary resume job state in the
+> `resume_parse_jobs` collection.
 
 ---
 
@@ -182,11 +182,11 @@ They do **not** call the agents backend.
 | Bio rewrite / text improvement | Frontend (LangChain.js) | Simple streaming, low latency |
 | Job description parsing | Frontend (LangChain.js) | In-context with resume data |
 | ATS matchability scoring | Frontend (LangChain.js) | In-context with resume data |
-| **Resume parsing from URL** | **Agents backend** | Requires PDF download, LinkedIn scraping (Bright Data), PII protection, multi-step LangGraph workflow |
+| **Career profile parsing** | **Agents backend** | Public resume/LinkedIn URLs and private uploaded PDF, DOC, or DOCX files; PII protection and multi-step parsing |
 
 ### Why Some Features Need the Agents Backend
 
-1. **Long-running operations** — PDF download, LinkedIn API calls, and multi-step
+1. **Long-running operations** — document download, LinkedIn API calls, and multi-step
    LLM workflows can take 10-90 seconds, exceeding Vercel's function timeout.
 2. **Python-only dependencies** — `pypdf`, `beautifulsoup4`, `playwright` for
    content extraction; Bright Data SDK for LinkedIn.
@@ -234,7 +234,7 @@ The agents backend should be used for any feature that:
 | Variable | Purpose |
 |:---|:---|
 | `API_GATEWAY_TOKEN` | Token auth for agent API endpoints |
-| `FIREBASE_DATABASE_URL` | Firebase Realtime Database URL |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Firebase service account JSON file used by the backend |
 | `BRIGHTDATA_API_KEY` | LinkedIn profile scraping via Bright Data |
 | `LANGSMITH_API_KEY` | LangSmith tracing |
 | `LANGSMITH_PROJECT` | LangSmith project name |

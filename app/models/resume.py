@@ -1,7 +1,7 @@
 import re
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Experience(BaseModel):
@@ -141,11 +141,33 @@ class ResumeSchema(BaseModel):
 
 
 class ResumeParseRequest(BaseModel):
-    """Request payload for resume parsing."""
+    """Request payload for resume parsing from a URL or uploaded Blob."""
 
-    url: str = Field(
-        description="URL to the resume (direct PDF link, LinkedIn profile, or resume webpage)"
+    uid: str = Field(
+        min_length=1,
+        description="Firebase user UID that owns the parsed career profile",
     )
+    url: str | None = Field(
+        default=None,
+        description="LinkedIn profile URL or public resume/document URL",
+    )
+    blob_id: str | None = Field(
+        default=None,
+        description="Vercel Blob pathname for an uploaded private resume",
+    )
+    blob_content: bytes | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Internal pre-fetched Blob bytes passed from the API process to its parse job",
+    )
+    source_text: str | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Source text preflighted by the API before an asynchronous combine job",
+    )
+    source_type: Literal["pdf", "doc", "docx", "linkedin", "html"] | None = Field(default=None, exclude=True, repr=False)
     model: str = Field(
         default="auto",
         description=(
@@ -155,6 +177,59 @@ class ResumeParseRequest(BaseModel):
             "or 'mistral' (AI extraction + PIIVault protection)"
         ),
     )
+    persist_profile: bool = Field(
+        default=True,
+        description="Whether the parse worker should directly save the result as the user's profile",
+    )
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "ResumeParseRequest":
+        self.uid = self.uid.strip()
+        if not self.uid or "/" in self.uid:
+            raise ValueError("uid must be a non-empty Firebase user ID")
+        if self.blob_id:
+            if self.url:
+                raise ValueError("Provide either url or blob_id, not both")
+        elif not self.url:
+            raise ValueError("Provide a public url or a private Blob source")
+        return self
+
+
+class ResumeCombineRequest(BaseModel):
+    """Two structured profiles supplied to the AI combine step."""
+
+    current_profile: ResumeSchema
+    new_profile: ResumeSchema
+    model: str = Field(default="gemini", description="Configured AI model provider")
+
+
+class ResumeCombineJobRequest(BaseModel):
+    """Source and current profile for an asynchronous import-and-combine job."""
+
+    uid: str = Field(min_length=1, description="Firebase user UID that owns the profile")
+    url: str | None = Field(default=None, description="Public resume or profile URL")
+    blob_id: str | None = Field(default=None, description="Private Vercel Blob pathname")
+    model: str = Field(default="auto", description="Model used to parse the new source")
+    combine_model: str = Field(default="gemini", description="Model used to combine profiles")
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "ResumeCombineJobRequest":
+        self.uid = self.uid.strip()
+        if not self.uid or "/" in self.uid:
+            raise ValueError("uid must be a non-empty Firebase user ID")
+        if bool(self.url) == bool(self.blob_id):
+            raise ValueError("Provide exactly one of url or blob_id")
+        if self.url and not self.url.startswith(("https://", "http://")):
+            raise ValueError("Resume URL must use HTTP or HTTPS")
+        return self
+
+
+class ResumeCombineResponse(BaseModel):
+    """Schema-validated combined career profile."""
+
+    success: bool = True
+    profile: ResumeSchema
+    model_used: str
 
 
 class ResumeParseResponse(BaseModel):

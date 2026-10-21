@@ -158,43 +158,30 @@ def test_build_resume_parser_graph() -> None:
 
 
 def test_resume_parse_api_endpoint_mocked(client: TestClient) -> None:
-    """Verify POST /api/v1/resume/parse handles requests and returns ResumeParseResponse."""
-    mock_resume = ResumeSchema(
-        full_name="Alex Mercer",
-        email="alex@example.com",
-        skills=["Python", "Machine Learning"],
-        summary="Senior ML Engineer",
-        experience=[],
-        education=[],
-        certificates=[],
-    )
-
+    """Verify POST /api/v1/resume/parse handles requests and returns ResumeParseJobResponse."""
     with patch(
-        "app.controllers.resume_controller.ResumeController.parse_resume",
+        "app.views.resume.firebase_service.async_set",
         new_callable=AsyncMock,
-    ) as mock_parse:
-        mock_parse.return_value = ResumeParseResponse(
-            success=True,
-            url="https://example.com/alex_resume.pdf",
-            url_type="pdf",
-            model_used="gemini",
-            resume=mock_resume,
-            error=None,
-        )
-
+    ), patch(
+        "app.views.resume.spawn_resume_parse",
+        new_callable=AsyncMock,
+    ) as mock_spawn:
         token = get_settings().api_gateway_token
         response = client.post(
             "/api/v1/resume/parse",
             headers={"Authorization": f"Bearer {token}"},
-            json={"url": "https://example.com/alex_resume.pdf", "model": "gemini"},
+            json={
+                "uid": "test_uid_123",
+                "url": "https://example.com/alex_resume.pdf",
+                "model": "gemini",
+            },
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["success"] is True
-        assert data["url_type"] == "pdf"
-        assert data["resume"]["full_name"] == "Alex Mercer"
-        assert "Python" in data["resume"]["skills"]
+        assert "job_id" in data
+        assert data["status"] == "queued"
+        mock_spawn.assert_awaited_once()
 
 
 def test_pii_vault_restores_naked_and_bracketed_placeholders() -> None:
@@ -358,7 +345,7 @@ async def test_resume_controller_routes_linkedin_to_python_mapping() -> None:
     }
 
     controller = ResumeController(get_settings())
-    req = ResumeParseRequest(url="https://www.linkedin.com/in/janedev/")
+    req = ResumeParseRequest(uid="test_uid_123", url="https://www.linkedin.com/in/janedev/")
 
     with patch(
         "app.controllers.resume_controller.fetch_linkedin_raw_data",
@@ -380,10 +367,15 @@ async def test_resume_controller_routes_linkedin_to_python_mapping() -> None:
 async def test_resume_controller_routes_linkedin_to_ai_with_pii_vault() -> None:
     """Verify ResumeController routes to AI agent and uses PIIVault when model='gemini' is requested."""
     from unittest.mock import AsyncMock, patch
+
     from app.controllers.resume_controller import ResumeController
 
     controller = ResumeController(get_settings())
-    req = ResumeParseRequest(url="https://www.linkedin.com/in/janedev/", model="gemini")
+    req = ResumeParseRequest(
+        uid="test_uid_123",
+        url="https://www.linkedin.com/in/janedev/",
+        model="gemini",
+    )
 
     mock_raw_text = "Name: Jane Developer\nEmail: jane@example.com\nExperience: Acme Inc"
     mock_ai_resume = ResumeSchema(
@@ -424,12 +416,119 @@ async def test_resume_controller_rejects_python_mapping_for_non_linkedin_urls() 
     from app.controllers.resume_controller import ResumeController
 
     controller = ResumeController(get_settings())
-    req = ResumeParseRequest(url="https://example.com/resume.pdf", model="python-mapping")
+    req = ResumeParseRequest(
+        uid="test_uid_123",
+        url="https://example.com/resume.pdf",
+        model="python-mapping",
+    )
 
     response = await controller.parse_resume(req)
 
     assert response.success is False
     assert "Python mapping is only available for structured LinkedIn URLs" in (response.error or "")
+
+
+@pytest.mark.asyncio
+async def test_resume_controller_refetches_blob_when_blob_content_is_none() -> None:
+    """Verify worker fetches from Vercel Blob when blob_content is not shipped in the payload."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.controllers.resume_controller import ResumeController
+
+    controller = ResumeController(get_settings())
+    req = ResumeParseRequest(
+        uid="test_user_blob",
+        blob_id="career-profiles/test_user_blob/sample_resume.pdf",
+        model="gemini",
+    )
+
+    mock_raw_text = "Name: Bob Worker\nEmail: bob@example.com\nSkills: Python"
+    mock_ai_resume = ResumeSchema(
+        full_name="{{PII_NAME_2}}",
+        email="{{PII_EMAIL_1}}",
+        skills=["Python"],
+    )
+
+    with patch(
+        "app.controllers.resume_controller.fetch_resume_blob",
+        new_callable=AsyncMock,
+    ) as mock_fetch_blob, patch(
+        "app.controllers.resume_controller.fetch_source_text",
+        new_callable=AsyncMock,
+    ) as mock_fetch_text, patch.object(
+        controller._graph,
+        "ainvoke",
+        new_callable=AsyncMock,
+    ) as mock_invoke:
+        mock_fetch_blob.return_value = (b"%PDF-1.4 dummy bytes", "pdf")
+        mock_fetch_text.return_value = (mock_raw_text, "pdf")
+        mock_invoke.return_value = {
+            "resume": mock_ai_resume,
+            "error": None,
+            "model_used": "gemini",
+        }
+
+        response = await controller.parse_resume(req)
+
+        assert response.success is True
+        mock_fetch_blob.assert_awaited_once_with(
+            "career-profiles/test_user_blob/sample_resume.pdf",
+            "test_user_blob",
+            controller._settings,
+        )
+        assert response.resume is not None
+        assert response.resume.full_name == "Bob Worker"
+
+
+@pytest.mark.asyncio
+async def test_resume_controller_handles_base64_blob_content() -> None:
+    """Verify worker handles base64-encoded blob_content string if passed in payload."""
+    import base64
+    from unittest.mock import AsyncMock, patch
+
+    from app.controllers.resume_controller import ResumeController
+
+    controller = ResumeController(get_settings())
+    raw_bytes = b"%PDF-1.4 test bytes"
+    b64_str = base64.b64encode(raw_bytes).decode("ascii")
+
+    req = ResumeParseRequest(
+        uid="test_user_b64",
+        blob_id="career-profiles/test_user_b64/resume.pdf",
+        model="gemini",
+    )
+    # Simulate deserialized payload with base64 string
+    req.blob_content = b64_str  # type: ignore[assignment]
+
+    mock_raw_text = "Name: Base64 Candidate\nEmail: b64@example.com"
+    mock_ai_resume = ResumeSchema(
+        full_name="{{PII_NAME_2}}",
+        email="{{PII_EMAIL_1}}",
+    )
+
+    with patch(
+        "app.controllers.resume_controller.fetch_source_text",
+        new_callable=AsyncMock,
+    ) as mock_fetch_text, patch.object(
+        controller._graph,
+        "ainvoke",
+        new_callable=AsyncMock,
+    ) as mock_invoke:
+        mock_fetch_text.return_value = (mock_raw_text, "pdf")
+        mock_invoke.return_value = {
+            "resume": mock_ai_resume,
+            "error": None,
+            "model_used": "gemini",
+        }
+
+        response = await controller.parse_resume(req)
+
+        assert response.success is True
+        mock_fetch_text.assert_awaited_once_with(
+            "blob://career-profiles/test_user_b64/resume.pdf",
+            "pdf",
+            source_bytes=raw_bytes,
+        )
 
 
 
