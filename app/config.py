@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     firebase_project_id: str = Field(default="")
     firebase_client_email: str = Field(default="")
     firebase_private_key: str = Field(default="")
-    firebase_database_url: str = Field(default="")
     google_application_credentials: str = Field(default="")
     google_application_credentials_json: str = Field(default="")
 
@@ -79,6 +78,20 @@ class Settings(BaseSettings):
             "AUTH_TOKEN",
             "API_KEY",
             "API_SECRET_TOKEN",
+        ),
+    )
+
+    # Vercel Blob credentials used by background resume workers to fetch private uploads.
+    career_profile_blob_store_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("CAREER_PROFILE_BLOB_STORE_ID", "BLOB_STORE_ID"),
+    )
+    career_profile_blob_read_write_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CAREER_PROFILE_BLOB_READ_WRITE_TOKEN",
+            "BLOB_READ_WRITE_TOKEN",
+            "VERCEL_BLOB_READ_WRITE_TOKEN",
         ),
     )
 

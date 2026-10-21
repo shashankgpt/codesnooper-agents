@@ -9,7 +9,7 @@ Agent workflows platform powered by LangChain, LangGraph, and FastAPI — deploy
 | **API** | FastAPI (async, Python 3.12) | High-performance asynchronous REST endpoints |
 | **Agents** | LangChain + LangGraph | Graph-based stateful agent workflows |
 | **LLM** | Google Gemini (`langchain-google-genai`) | Multimodal LLM reasoning |
-| **Database** | Firebase Realtime Database (`firebase-admin`) | Persistent real-time state and task store |
+| **Database** | Firebase Firestore (`firebase-admin`) | Persistent state and task store |
 | **Deployment** | Modal.com (serverless Python SDK) | Ephemeral API containers and long-running background tasks |
 | **Dependency Mgmt** | UV | Ultra-fast Python package installer & resolver |
 | **Type Checking** | Pyright (strict) | Strict static typing across codebase |
@@ -55,8 +55,7 @@ cp .env.example .env
 Update `.env` with your credentials:
 
 ```env
-# Firebase Realtime Database
-FIREBASE_DATABASE_URL=https://your-project.firebaseio.com
+# Firebase Admin credentials for Firestore
 GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
 
 # Google Gemini
@@ -69,6 +68,10 @@ SENTRY_TRACES_SAMPLE_RATE=1.0
 # Application
 APP_ENV=development
 APP_DEBUG=true
+
+# Private Vercel Blob access for uploaded career-profile resumes
+CAREER_PROFILE_BLOB_STORE_ID=store_id_from_vercel
+CAREER_PROFILE_BLOB_READ_WRITE_TOKEN=vercel_blob_read_write_token
 ```
 
 ### 3. Start Development Server
@@ -76,6 +79,8 @@ APP_DEBUG=true
 ```bash
 uv run fastapi dev app/main.py
 ```
+
+In development, resume parsing runs as a background task in the local API process. The deployed app dispatches those jobs to Modal.
 
 The application runs at **http://localhost:8000**:
 - **Interactive Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -141,7 +146,6 @@ Create a secret named **`codesnooper-secrets`** in Modal. You can do this via th
 
 ```bash
 modal secret create codesnooper-secrets \
-  FIREBASE_DATABASE_URL="https://your-project.firebaseio.com" \
   GOOGLE_APPLICATION_CREDENTIALS_JSON='{"type":"service_account",...}' \
   GOOGLE_API_KEY="your-gemini-api-key" \
   LANGSMITH_API_KEY="your-langsmith-api-key" \
@@ -151,8 +155,15 @@ modal secret create codesnooper-secrets \
   LANGSMITH_ENDPOINT="https://api.smith.langchain.com" \
   SENTRY_DSN="https://your-key@o123456.ingest.us.sentry.io/your-project-id" \
   SENTRY_TRACES_SAMPLE_RATE="1.0" \
+  CAREER_PROFILE_BLOB_STORE_ID="store_id_from_vercel" \
+  CAREER_PROFILE_BLOB_READ_WRITE_TOKEN="vercel_blob_read_write_token" \
   APP_ENV="production"
 ```
+
+Use the same Blob store ID and read-write token configured for the Next.js app.
+Uploaded resume requests contain the Blob pathname. The API process downloads the
+private file directly from Vercel Blob before returning `202 Accepted`, then passes
+the bytes to the parse job so the background worker does not need Blob access.
 
 LangSmith settings in the local `.env` file are not available in Modal. The
 `codesnooper-secrets` secret must contain `LANGSMITH_API_KEY`; tracing is only
@@ -208,7 +219,7 @@ codesnooper-agents/
 │   ├── controllers/                # Controllers: Business logic & service orchestration
 │   │   ├── __init__.py
 │   │   └── health_controller.py
-│   ├── repositories/               # Repositories: Data access (Firebase RTDB async wrappers)
+│   ├── repositories/               # Repositories: Data access (Firebase Firestore async wrappers)
 │   │   ├── __init__.py
 │   │   └── firebase_client.py
 │   ├── agents/                     # Agent workflows (LangChain & LangGraph graphs)
@@ -238,7 +249,7 @@ codesnooper-agents/
 - **REST Endpoints (`app/views/`):** Trigger quick validations, return HTTP `202 Accepted` with a job ID, or handle synchronous queries.
 - **Background Worker (`modal_app.py:run_agent_task`):** Modal functions invoked via `.spawn()` handle long-running agent graph executions asynchronously without timing out HTTP connections.
 - **Scheduled Agents (`modal_app.py:scheduled_agent_check`):** Trigger periodic monitoring or ingestion agents on a cron schedule (`modal.Cron`).
-- **State Persistence:** Results and status updates are persisted back to Firebase Realtime Database.
+- **State Persistence:** Results and status updates are persisted to Firestore.
 
 ---
 

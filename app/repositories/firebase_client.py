@@ -6,7 +6,7 @@ from functools import partial
 from typing import Any
 
 import firebase_admin
-from firebase_admin import credentials, db, firestore
+from firebase_admin import credentials, firestore
 
 from app.config import get_settings
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class FirebaseService:
-    """Firebase Firestore and RTDB service with non-blocking async execution wrappers."""
+    """Firebase Firestore service with non-blocking async execution wrappers."""
 
     def __init__(self) -> None:
         self._initialized = False
@@ -70,8 +70,6 @@ class FirebaseService:
                 cred = credentials.Certificate(settings.google_application_credentials)
 
             options: dict[str, Any] = {}
-            if settings.firebase_database_url:
-                options["databaseURL"] = settings.firebase_database_url
             if settings.firebase_project_id:
                 options["projectId"] = settings.firebase_project_id
 
@@ -101,62 +99,103 @@ class FirebaseService:
         return self._firestore_db
 
     def check_connection(self) -> bool:
-        """Synchronous check for Firebase connectivity (Firestore / Realtime Database)."""
+        """Synchronous check for Firebase Firestore connectivity."""
         if not self._initialized:
             return False
 
-        # First check Firestore connectivity if client is available
-        if self._firestore_db is not None:
-            try:
-                _ = next(self._firestore_db.collections(), None)
-                return True
-            except Exception as exc:
-                logger.warning("Firestore connection check failed: %s", exc)
-
-        # Fallback to Realtime Database if configured
-        settings = get_settings()
-        if settings.firebase_database_url:
-            try:
-                ref = db.reference()
-                _ = ref.get(shallow=True)
-                return True
-            except Exception as exc:
-                logger.warning("Firebase RTDB connection check failed: %s", exc)
-
-        return False
+        if self._firestore_db is None:
+            return False
+        try:
+            self._firestore_db.collection("__healthcheck__").limit(1).get()
+            return True
+        except Exception as exc:
+            logger.warning("Firestore connection check failed: %s", exc)
+            return False
 
     async def async_get(self, path: str) -> Any:
-        """Fetch data from Firebase Realtime Database asynchronously."""
+        """Fetch a Firestore document or all documents in a collection asynchronously."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, partial(self._sync_get, path))
 
     async def async_set(self, path: str, data: Any) -> None:
-        """Write data to Firebase Realtime Database asynchronously."""
+        """Write a Firestore document asynchronously."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, partial(self._sync_set, path, data))
 
     async def async_update(self, path: str, data: dict[str, Any]) -> None:
-        """Update data in Firebase Realtime Database asynchronously."""
+        """Update a Firestore document asynchronously."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, partial(self._sync_update, path, data))
 
     async def async_delete(self, path: str) -> None:
-        """Delete data from Firebase Realtime Database asynchronously."""
+        """Delete a Firestore document asynchronously."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, partial(self._sync_delete, path))
 
+    async def async_merge(self, path: str, data: dict[str, Any]) -> None:
+        """Set-with-merge a Firestore document asynchronously (creates if missing)."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, partial(self._sync_merge, path, data))
+
+    @staticmethod
+    def _path_segments(path: str) -> list[str]:
+        segments = [segment for segment in path.strip("/").split("/") if segment]
+        if not segments:
+            raise ValueError("Firestore path must not be empty")
+        return segments
+
+    def _collection_reference(self, path: str) -> Any:
+        segments = self._path_segments(path)
+        if len(segments) % 2 != 1:
+            raise ValueError(
+                f"Firestore collection path must have an odd number of segments: {path}"
+            )
+        reference: Any = self._firestore_db
+        for index, segment in enumerate(segments):
+            reference = (
+                reference.collection(segment)
+                if index % 2 == 0
+                else reference.document(segment)
+            )
+        return reference
+
+    def _document_reference(self, path: str) -> Any:
+        segments = self._path_segments(path)
+        if len(segments) % 2 != 0:
+            raise ValueError(
+                f"Firestore document path must have an even number of segments: {path}"
+            )
+        reference: Any = self._firestore_db
+        for index, segment in enumerate(segments):
+            reference = (
+                reference.collection(segment)
+                if index % 2 == 0
+                else reference.document(segment)
+            )
+        return reference
+
     def _sync_get(self, path: str) -> Any:
-        data: Any = db.reference(path).get()
-        return data
+        segments = self._path_segments(path)
+        if len(segments) % 2 == 1:
+            return {
+                snapshot.id: snapshot.to_dict() or {}
+                for snapshot in self._collection_reference(path).stream()
+            }
+
+        snapshot = self._document_reference(path).get()
+        return snapshot.to_dict() if snapshot.exists else None
 
     def _sync_set(self, path: str, data: Any) -> None:
-        db.reference(path).set(data)
+        self._document_reference(path).set(data)
 
     def _sync_update(self, path: str, data: dict[str, Any]) -> None:
-        db.reference(path).update(data)
+        self._document_reference(path).set(data, merge=True)
 
     def _sync_delete(self, path: str) -> None:
-        db.reference(path).delete()
+        self._document_reference(path).delete()
+
+    def _sync_merge(self, path: str, data: dict[str, Any]) -> None:
+        self._document_reference(path).set(data, merge=True)
 
 
 firebase_service = FirebaseService()

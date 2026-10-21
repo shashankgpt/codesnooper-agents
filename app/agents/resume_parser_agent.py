@@ -3,11 +3,14 @@ import io
 import json
 import logging
 import re
+import subprocess
+import tempfile
 from typing import Any, Literal, NotRequired, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+from docx import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pypdf import PdfReader
@@ -30,7 +33,7 @@ class ResumeParserState(TypedDict):
     """Execution state for the resume parser agent (strictly PII-free)."""
 
     url: str
-    url_type: NotRequired[Literal["pdf", "linkedin", "html"]]
+    url_type: NotRequired[Literal["pdf", "doc", "docx", "linkedin", "html"]]
     raw_content: NotRequired[str | None]
     anonymized_content: NotRequired[str | None]
     model: NotRequired[str]
@@ -60,7 +63,7 @@ def resolve_direct_download_url(url: str) -> str:
     return url
 
 
-def classify_url(url: str) -> Literal["pdf", "linkedin", "html"]:
+def classify_url(url: str) -> Literal["pdf", "doc", "docx", "linkedin", "html"]:
     """Determine whether the target URL is a PDF, LinkedIn profile, or general HTML."""
     parsed = urlparse(url.strip())
     domain = parsed.netloc.lower()
@@ -71,6 +74,10 @@ def classify_url(url: str) -> Literal["pdf", "linkedin", "html"]:
         if "/file/d/" in path or "id=" in parsed.query:
             return "pdf"
 
+    if path.endswith(".docx"):
+        return "docx"
+    if path.endswith(".doc"):
+        return "doc"
     if path.endswith(".pdf") or "pdf" in path.split("/"):
         return "pdf"
     if "linkedin.com" in domain:
@@ -78,15 +85,22 @@ def classify_url(url: str) -> Literal["pdf", "linkedin", "html"]:
     return "html"
 
 
-async def fetch_pdf_text(url: str, timeout: float = 30.0) -> str:
+async def fetch_pdf_text(
+    url: str, timeout: float = 30.0, extra_headers: dict[str, str] | None = None
+) -> str:
     """Download a remote PDF and extract text from all readable pages."""
     target_url = resolve_direct_download_url(url)
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
         response = await client.get(target_url)
         response.raise_for_status()
 
-    reader = PdfReader(io.BytesIO(response.content))
+    return extract_pdf_text(response.content)
+
+
+def extract_pdf_text(content: bytes) -> str:
+    """Extract text from downloaded PDF bytes."""
+    reader = PdfReader(io.BytesIO(content))
     extracted_pages: list[str] = []
     for page_idx, page in enumerate(reader.pages):
         page_text = page.extract_text()
@@ -99,6 +113,52 @@ async def fetch_pdf_text(url: str, timeout: float = 30.0) -> str:
             "Could not extract readable text from PDF (it might be scanned/image-only)."
         )
     return full_text
+
+
+async def fetch_word_text(
+    url: str,
+    document_type: Literal["doc", "docx"],
+    timeout: float = 30.0,
+    extra_headers: dict[str, str] | None = None,
+) -> str:
+    """Fetch and extract text from a DOC or DOCX document."""
+    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+
+    return await extract_word_text(response.content, document_type)
+
+
+async def extract_word_text(content: bytes, document_type: Literal["doc", "docx"]) -> str:
+    """Extract text from downloaded DOC or DOCX bytes."""
+    if document_type == "docx":
+        document = Document(io.BytesIO(content))
+        paragraphs = [
+            paragraph.text.strip()
+            for paragraph in document.paragraphs
+            if paragraph.text.strip()
+        ]
+        for table in document.tables:
+            paragraphs.extend(
+                " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                for row in table.rows
+            )
+        text = "\n".join(paragraph for paragraph in paragraphs if paragraph)
+    else:
+        with tempfile.NamedTemporaryFile(suffix=".doc") as document_file:
+            document_file.write(content)
+            document_file.flush()
+            result = subprocess.run(
+                ["antiword", document_file.name], capture_output=True, check=False, timeout=20
+            )
+        if result.returncode != 0:
+            raise ValueError("Could not read this DOC file. Please try saving it as DOCX or PDF.")
+        text = result.stdout.decode("utf-8", errors="replace").strip()
+
+    if not text:
+        raise ValueError("Could not extract readable text from the document.")
+    return text
 
 
 async def fetch_html_text(url: str, timeout: float = 30.0) -> str:
@@ -159,11 +219,24 @@ def detect_source_node(state: ResumeParserState) -> ResumeParserState:
     }
 
 
-async def fetch_source_text(url: str) -> tuple[str, Literal["pdf", "linkedin", "html"]]:
+async def fetch_source_text(
+    url: str,
+    source_type: Literal["pdf", "doc", "docx", "linkedin", "html"] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    source_bytes: bytes | None = None,
+) -> tuple[str, Literal["pdf", "doc", "docx", "linkedin", "html"]]:
     """Retrieve raw text from the source URL based on classified type."""
-    url_type = classify_url(url)
-    if url_type == "pdf":
-        raw_text = await fetch_pdf_text(url)
+    url_type = source_type or classify_url(url)
+    if source_bytes is not None and url_type == "pdf":
+        raw_text = extract_pdf_text(source_bytes)
+    elif source_bytes is not None and url_type in ("doc", "docx"):
+        raw_text = await extract_word_text(source_bytes, url_type)
+    elif source_bytes is not None:
+        raise ValueError("Direct Blob downloads are supported only for PDF, DOC, and DOCX files")
+    elif url_type == "pdf":
+        raw_text = await fetch_pdf_text(url, extra_headers=extra_headers)
+    elif url_type in ("doc", "docx"):
+        raw_text = await fetch_word_text(url, url_type, extra_headers=extra_headers)
     elif url_type == "linkedin":
         raw_text = await fetch_linkedin_profile(url)
     else:
