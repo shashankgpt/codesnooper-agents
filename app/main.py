@@ -89,6 +89,9 @@ def create_app() -> FastAPI:
             if not TokenAuthMiddleware.is_path_exempt(path):
                 for method in path_item:
                     if method.lower() in ("get", "post", "put", "patch", "delete"):
+                        operation = path_item[method]
+                        if {"FirebaseIDToken": []} in operation.get("security", []):
+                            operation["security"] = [{"FirebaseIDToken": [], "APIKeyHeader": []}]
                         path_item[method].setdefault(
                             "security",
                             [

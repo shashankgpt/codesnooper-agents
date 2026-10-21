@@ -163,7 +163,9 @@ class ResumeController:
                 # Direct Python mapping for LinkedIn profiles (instant, 100% accurate, zero-LLM, NO PIIVault)
                 logger.info("Processing LinkedIn profile via deterministic Python mapping (zero-LLM, NO PIIVault)")
                 scrape_start = time.perf_counter()
-                profile_dict = await fetch_linkedin_raw_data(url_str)
+                profile_dict = request.source_profile
+                if profile_dict is None:
+                    profile_dict = await fetch_linkedin_raw_data(url_str)
                 scrape_elapsed = time.perf_counter() - scrape_start
 
                 map_start = time.perf_counter()

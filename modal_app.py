@@ -50,11 +50,16 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
     """Execute a resume parser request and persist its pollable result."""
     from app.config import get_settings
     from app.controllers.resume_controller import ResumeController
-    from app.core.resume_jobs import persist_profile_and_complete_job, run_resume_combine_job
+    from app.core.resume_jobs import (
+        persist_profile_and_complete_job,
+        require_resume_job_owner,
+        run_resume_combine_job,
+    )
     from app.models.resume import ResumeParseRequest
     from app.repositories.firebase_client import firebase_service
 
     firebase_service.initialize()
+    uid = await require_resume_job_owner(task_id, payload.get("uid"))
     path = f"resume_parse_jobs/{task_id}"
     await firebase_service.async_merge(
         path,
@@ -72,6 +77,7 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
                     task_id, request.uid, result, persist_profile=request.persist_profile
                 )
             else:
+                await require_resume_job_owner(task_id, uid)
                 await firebase_service.async_merge(
                     path,
                     {
@@ -85,6 +91,7 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
         return result
     except Exception as exc:
         result = {"success": False, "error": str(exc)}
+        await require_resume_job_owner(task_id, uid)
         await firebase_service.async_merge(
             path,
             {
