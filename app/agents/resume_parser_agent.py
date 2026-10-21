@@ -95,7 +95,7 @@ async def fetch_pdf_text(
         response = await client.get(target_url)
         response.raise_for_status()
 
-    return await asyncio.to_thread(extract_pdf_text, response.content)
+    return extract_pdf_text(response.content)
 
 
 def extract_pdf_text(content: bytes) -> str:
@@ -132,11 +132,6 @@ async def fetch_word_text(
 
 async def extract_word_text(content: bytes, document_type: Literal["doc", "docx"]) -> str:
     """Extract text from downloaded DOC or DOCX bytes."""
-    return await asyncio.to_thread(_extract_word_text, content, document_type)
-
-
-def _extract_word_text(content: bytes, document_type: Literal["doc", "docx"]) -> str:
-    """Perform blocking document parsing outside the event loop."""
     if document_type == "docx":
         document = Document(io.BytesIO(content))
         paragraphs = [
@@ -154,14 +149,9 @@ def _extract_word_text(content: bytes, document_type: Literal["doc", "docx"]) ->
         with tempfile.NamedTemporaryFile(suffix=".doc") as document_file:
             document_file.write(content)
             document_file.flush()
-            try:
-                result = subprocess.run(
-                    ["antiword", document_file.name], capture_output=True, check=False, timeout=20
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-                raise ValueError(
-                    "Could not read this DOC file. Please try saving it as DOCX or PDF."
-                ) from exc
+            result = subprocess.run(
+                ["antiword", document_file.name], capture_output=True, check=False, timeout=20
+            )
         if result.returncode != 0:
             raise ValueError("Could not read this DOC file. Please try saving it as DOCX or PDF.")
         text = result.stdout.decode("utf-8", errors="replace").strip()
@@ -238,7 +228,7 @@ async def fetch_source_text(
     """Retrieve raw text from the source URL based on classified type."""
     url_type = source_type or classify_url(url)
     if source_bytes is not None and url_type == "pdf":
-        raw_text = await asyncio.to_thread(extract_pdf_text, source_bytes)
+        raw_text = extract_pdf_text(source_bytes)
     elif source_bytes is not None and url_type in ("doc", "docx"):
         raw_text = await extract_word_text(source_bytes, url_type)
     elif source_bytes is not None:
@@ -410,4 +400,5 @@ def build_resume_parser_graph():
     workflow.add_edge("parse_resume", END)
 
     return workflow.compile()
+
 

@@ -165,13 +165,11 @@ def test_resume_parse_api_endpoint_mocked(client: TestClient) -> None:
     ), patch(
         "app.views.resume.spawn_resume_parse",
         new_callable=AsyncMock,
-    ) as mock_spawn, patch(
-        "app.core.auth.auth.verify_id_token", return_value={"uid": "test_uid_123"}
-    ):
+    ) as mock_spawn:
         token = get_settings().api_gateway_token
         response = client.post(
             "/api/v1/resume/parse",
-            headers={"X-API-Key": token, "Authorization": "Bearer test-user-id-token"},
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "uid": "test_uid_123",
                 "url": "https://example.com/alex_resume.pdf",

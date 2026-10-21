@@ -161,17 +161,9 @@ modal secret create codesnooper-secrets \
 ```
 
 Use the same Blob store ID and read-write token configured for the Next.js app.
-Uploaded resume parse requests contain the Blob pathname. The API verifies that
-the private file is readable before returning `202 Accepted`. The background
-worker downloads it again via Vercel Blob; the API does not pass file bytes to the
-worker. Both the API and worker functions require the Blob credentials and share
-the `codesnooper-secrets` secret. Combine jobs extract and forward the source text
-during preflight so their workers reuse it without downloading the file again.
-
-Resume parse, combine, and job read/delete endpoints require a Firebase ID token
-in `Authorization: Bearer <id-token>` and the gateway token in `X-API-Key` (or
-`X-Gateway-Token`). The request `uid` must match the verified Firebase user; only
-that user can access the job and its uploaded Blob.
+Uploaded resume requests contain the Blob pathname. The API process downloads the
+private file directly from Vercel Blob before returning `202 Accepted`, then passes
+the bytes to the parse job so the background worker does not need Blob access.
 
 LangSmith settings in the local `.env` file are not available in Modal. The
 `codesnooper-secrets` secret must contain `LANGSMITH_API_KEY`; tracing is only

@@ -1,26 +1,18 @@
 """Read private resume uploads directly from Vercel Blob storage."""
 
 from pathlib import PurePosixPath
-from typing import Literal
 
 from app.config import Settings
 
 
-async def fetch_resume_blob(
-    pathname: str, uid: str, settings: Settings
-) -> tuple[bytes, Literal["pdf", "doc", "docx"]]:
-    """Download an uploaded resume using the verified job or request owner."""
+async def fetch_resume_blob(pathname: str, uid: str, settings: Settings) -> tuple[bytes, str]:
+    """Download an uploaded resume from the configured private Blob store."""
     expected_prefix = f"career-profiles/{uid}/"
-    if (
-        not uid
-        or "/" in uid
-        or not pathname.startswith(expected_prefix)
-        or ".." in PurePosixPath(pathname).parts
-    ):
+    if not pathname.startswith(expected_prefix) or ".." in PurePosixPath(pathname).parts:
         raise ValueError("The uploaded resume Blob does not belong to this user")
 
     extension = PurePosixPath(pathname).suffix.lower().lstrip(".")
-    if extension not in ("pdf", "doc", "docx"):
+    if extension not in {"pdf", "doc", "docx"}:
         raise ValueError("Uploaded resume must be a PDF, DOC, or DOCX file")
 
     import os

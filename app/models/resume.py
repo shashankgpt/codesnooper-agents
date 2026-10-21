@@ -167,12 +167,6 @@ class ResumeParseRequest(BaseModel):
         repr=False,
         description="Source text preflighted by the API before an asynchronous combine job",
     )
-    source_profile: dict[str, Any] | None = Field(
-        default=None,
-        exclude=True,
-        repr=False,
-        description="Structured LinkedIn data preflighted by the API for deterministic mapping",
-    )
     source_type: Literal["pdf", "doc", "docx", "linkedin", "html"] | None = Field(default=None, exclude=True, repr=False)
     model: str = Field(
         default="auto",
