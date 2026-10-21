@@ -69,14 +69,14 @@ def test_protected_endpoint_with_valid_token_in_bearer_passes(client: TestClient
     token = settings.api_gateway_token
     assert token, "api_gateway_token should be configured in settings"
 
-    # Send request with valid token but empty body to check route reached.
-    # Expect 422 Unprocessable Entity rather than 401 Unauthorized.
+    # Gateway authentication alone does not establish a Firebase user identity.
     resp = client.post(
         "/api/v1/resume/parse",
         headers={"Authorization": f"Bearer {token}"},
         json={},
     )
-    assert resp.status_code == 422  # Passed auth middleware and reached FastAPI validation
+    assert resp.status_code == 401
+    assert "Firebase ID token" in resp.json()["detail"]
 
 
 def test_protected_endpoint_with_valid_token_in_x_api_key_passes(client: TestClient) -> None:
@@ -90,7 +90,8 @@ def test_protected_endpoint_with_valid_token_in_x_api_key_passes(client: TestCli
         headers={"X-API-Key": token},
         json={},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 401
+    assert "Firebase ID token" in resp.json()["detail"]
 
 
 def test_protected_endpoint_with_valid_token_in_x_gateway_token_passes(client: TestClient) -> None:
@@ -104,7 +105,8 @@ def test_protected_endpoint_with_valid_token_in_x_gateway_token_passes(client: T
         headers={"X-Gateway-Token": token},
         json={},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 401
+    assert "Firebase ID token" in resp.json()["detail"]
 
 
 def test_missing_server_token_returns_500(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,8 +141,7 @@ def test_openapi_swagger_security_schemes(client: TestClient) -> None:
     # Protected endpoint requires security
     resume_op = schema["paths"]["/api/v1/resume/parse"]["post"]
     assert "security" in resume_op
-    assert {"HTTPBearer": []} in resume_op["security"]
-    assert {"APIKeyHeader": []} in resume_op["security"]
+    assert resume_op["security"] == [{"FirebaseIDToken": [], "APIKeyHeader": []}]
 
 
 def test_swagger_ui_request_duration_configured(client: TestClient) -> None:

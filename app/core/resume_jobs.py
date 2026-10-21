@@ -15,6 +15,23 @@ def configure_modal_job_function(function: Any) -> None:
     _modal_job_function = function
 
 
+async def require_resume_job_owner(job_id: str, uid: Any) -> str:
+    """Match worker identity to the owner persisted by the authenticated API."""
+    from app.repositories.firebase_client import firebase_service
+
+    job = await firebase_service.async_get(f"resume_parse_jobs/{job_id}")
+    if (
+        not isinstance(uid, str)
+        or not uid.strip()
+        or uid != uid.strip()
+        or "/" in uid
+        or not job
+        or job.get("uid") != uid
+    ):
+        raise ValueError("Resume parse job owner mismatch or job not found")
+    return uid
+
+
 async def persist_profile_and_complete_job(
     job_id: str,
     uid: str,
@@ -24,6 +41,7 @@ async def persist_profile_and_complete_job(
     """Optionally persist a successful parse before marking its job complete."""
     from app.repositories.firebase_client import firebase_service
 
+    uid = await require_resume_job_owner(job_id, uid)
     now = datetime.now(UTC).isoformat()
     profile = result.get("resume")
     if not isinstance(profile, dict):
@@ -84,21 +102,23 @@ async def run_resume_combine_job(job_id: str, payload: dict[str, Any]) -> dict[s
     )
     from app.repositories.firebase_client import firebase_service
 
+    uid = await require_resume_job_owner(job_id, payload.get("uid"))
     request = ResumeCombineJobRequest.model_validate(payload)
-    current_profile_data = await firebase_service.async_get(f"profile/{request.uid}")
+    current_profile_data = await firebase_service.async_get(f"profile/{uid}")
     if not current_profile_data:
         raise ValueError("No saved career profile was found to combine")
     current_profile = ResumeSchema.model_validate(current_profile_data)
     controller = ResumeController(get_settings())
     parsed = await controller.parse_resume(
         ResumeParseRequest(
-            uid=request.uid,
+            uid=uid,
             url=request.url,
             blob_id=request.blob_id,
             model=request.model,
             persist_profile=False,
             source_text=payload.get("source_text"),
             source_type=payload.get("source_type"),
+            source_profile=payload.get("source_profile"),
         )
     )
     if not parsed.success or parsed.resume is None:
@@ -114,7 +134,7 @@ async def run_resume_combine_job(job_id: str, payload: dict[str, Any]) -> dict[s
     result = parsed.model_dump(mode="json")
     result["resume"] = combined.profile.model_dump(mode="json")
     result["model_used"] = f"{parsed.model_used}+combine:{combined.model_used}"
-    await persist_profile_and_complete_job(job_id, request.uid, result)
+    await persist_profile_and_complete_job(job_id, uid, result)
     return result
 
 
@@ -130,6 +150,7 @@ async def _run_local_resume_parse(
     from app.repositories.firebase_client import firebase_service
 
     path = f"resume_parse_jobs/{job_id}"
+    uid = await require_resume_job_owner(job_id, payload.get("uid"))
     now = datetime.now(UTC).isoformat()
     try:
         await firebase_service.async_merge(path, {"status": "processing", "updated_at": now})
@@ -146,6 +167,7 @@ async def _run_local_resume_parse(
                 job_id, request.uid, result, persist_profile=request.persist_profile
             )
             return
+        await require_resume_job_owner(job_id, uid)
         await firebase_service.async_merge(
             path,
             {
@@ -157,6 +179,7 @@ async def _run_local_resume_parse(
     except Exception as exc:
         logger.exception("Local resume parse job %s failed", job_id)
         try:
+            await require_resume_job_owner(job_id, uid)
             await firebase_service.async_merge(
                 path,
                 {
