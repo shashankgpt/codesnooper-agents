@@ -80,6 +80,14 @@ class Settings(BaseSettings):
             "API_SECRET_TOKEN",
         ),
     )
+    api_gateway_tokens: str = Field(default="", validation_alias="API_GATEWAY_TOKENS")
+
+    # Preferred machine-to-machine authentication. Keep the singular aliases so
+    # callers can rotate a secret without changing application code.
+    m2m_signing_secret: str = Field(
+        default="", validation_alias=AliasChoices("M2M_SIGNING_SECRET", "M2M_SIGNING_KEY")
+    )
+    m2m_signing_secrets: str = Field(default="", validation_alias="M2M_SIGNING_SECRETS")
 
     # Vercel Blob credentials used by background resume workers to fetch private uploads.
     career_profile_blob_store_id: str = Field(
@@ -98,6 +106,25 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
+
+    @staticmethod
+    def _split_secrets(*values: str) -> tuple[str, ...]:
+        return tuple(
+            secret
+            for value in values
+            for secret in (item.strip() for item in value.split(","))
+            if secret
+        )
+
+    @property
+    def gateway_tokens(self) -> tuple[str, ...]:
+        """Return all active legacy tokens during a zero-downtime rotation."""
+        return self._split_secrets(self.api_gateway_tokens, self.api_gateway_token)
+
+    @property
+    def m2m_signing_secrets_for_verification(self) -> tuple[str, ...]:
+        """Return active HMAC secrets, accepting both old and new values during rotation."""
+        return self._split_secrets(self.m2m_signing_secrets, self.m2m_signing_secret)
 
     @property
     def langsmith_uses_agent_address(self) -> bool:

@@ -7,6 +7,7 @@ from typing import Any
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.api_core.exceptions import AlreadyExists
 
 from app.config import get_settings
 
@@ -137,6 +138,23 @@ class FirebaseService:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, partial(self._sync_merge, path, data))
 
+    async def async_create_or_get_resume_job(
+        self,
+        job_id: str,
+        idempotency_key: str | None,
+        data: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Atomically create a job or return an active matching idempotent job.
+
+        A separate idempotency document serializes concurrent POSTs without
+        changing the externally visible job ID format.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            partial(self._sync_create_or_get_resume_job, job_id, idempotency_key, data),
+        )
+
     @staticmethod
     def _path_segments(path: str) -> list[str]:
         segments = [segment for segment in path.strip("/").split("/") if segment]
@@ -196,6 +214,51 @@ class FirebaseService:
 
     def _sync_merge(self, path: str, data: dict[str, Any]) -> None:
         self._document_reference(path).set(data, merge=True)
+
+    def _sync_create_or_get_resume_job(
+        self, job_id: str, idempotency_key: str | None, data: dict[str, Any]
+    ) -> tuple[str, bool]:
+        if not idempotency_key:
+            self._document_reference(f"resume_parse_jobs/{job_id}").set(data)
+            return job_id, True
+
+        idempotency_ref = self._document_reference(
+            f"resume_parse_job_idempotency/{idempotency_key}"
+        )
+        transaction = self._firestore_db.transaction()
+
+        @firestore.transactional
+        def create_or_get(transaction: Any) -> tuple[str, bool]:
+            marker = idempotency_ref.get(transaction=transaction)
+            if marker.exists:
+                marker_data = marker.to_dict() or {}
+                existing_job_id = marker_data.get("job_id")
+                if isinstance(existing_job_id, str):
+                    existing_job = self._document_reference(
+                        f"resume_parse_jobs/{existing_job_id}"
+                    ).get(transaction=transaction)
+                    existing_data = existing_job.to_dict() if existing_job.exists else None
+                    if (
+                        existing_data
+                        and existing_data.get("uid") == data["uid"]
+                        and existing_data.get("status") in {"queued", "processing"}
+                    ):
+                        return existing_job_id, False
+
+            job_ref = self._document_reference(f"resume_parse_jobs/{job_id}")
+            transaction.set(idempotency_ref, {"job_id": job_id, "uid": data["uid"]})
+            transaction.set(job_ref, data)
+            return job_id, True
+
+        try:
+            return create_or_get(transaction)
+        except AlreadyExists:
+            # Defensive fallback for Firestore emulators with incomplete transaction support.
+            existing = idempotency_ref.get().to_dict() or {}
+            existing_job_id = existing.get("job_id")
+            if isinstance(existing_job_id, str):
+                return existing_job_id, False
+            raise
 
 
 firebase_service = FirebaseService()
