@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import secrets
 import time
 from typing import ClassVar
@@ -28,11 +30,11 @@ class TimingMiddleware(BaseHTTPMiddleware):
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that enforces API Gateway token authentication on incoming requests.
+    Middleware that enforces machine-to-machine authentication on incoming requests.
 
     All endpoints are protected except:
     - Health endpoints (/health, /api/v1/health, /hello, /api/v1/hello)
-    - Interactive API docs (/docs, /redoc, /openapi.json)
+    - Interactive API docs only when the application enables them in debug mode
     - CORS pre-flight OPTIONS requests
     """
 
@@ -99,14 +101,18 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Health checks and documentation endpoints bypass auth
+        # Health checks and any debug-only documentation endpoints bypass auth.
+        # In production FastAPI does not register those routes.
         if self._is_exempt(request.url.path):
             return await call_next(request)
 
         settings = get_settings()
-        expected_token = settings.api_gateway_token
+        signing_secrets = settings.m2m_signing_secrets_for_verification
+        if signing_secrets:
+            return await self._validate_hmac_request(request, call_next, signing_secrets)
 
-        if not expected_token:
+        expected_tokens = settings.gateway_tokens
+        if not expected_tokens:
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
@@ -117,7 +123,10 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
         provided_token = self._extract_token(request)
 
-        if not provided_token or not secrets.compare_digest(provided_token, expected_token):
+        if not provided_token or not any(
+            secrets.compare_digest(provided_token, expected_token)
+            for expected_token in expected_tokens
+        ):
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
@@ -126,5 +135,50 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 },
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        return await call_next(request)
+
+    @staticmethod
+    def _unauthorized(detail: str) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": detail, "error": "Unauthorized"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    async def _validate_hmac_request(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+        signing_secrets: tuple[str, ...],
+    ) -> Response:
+        """Validate a time-bound HMAC signature over the exact request body."""
+        timestamp = request.headers.get("x-timestamp")
+        signature = request.headers.get("x-signature")
+        if not timestamp or not signature:
+            return self._unauthorized("Missing machine-to-machine request signature.")
+
+        try:
+            timestamp_seconds = int(timestamp)
+        except ValueError:
+            return self._unauthorized("Invalid machine-to-machine request timestamp.")
+
+        if abs(time.time() - timestamp_seconds) > 300:
+            return self._unauthorized("Expired machine-to-machine request signature.")
+
+        raw_body = await request.body()
+        signed_payload = (
+            f"{timestamp}.{request.method.upper()}.{request.url.path}.".encode("utf-8")
+            + raw_body
+        )
+        is_valid = any(
+            secrets.compare_digest(
+                signature,
+                hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest(),
+            )
+            for secret in signing_secrets
+        )
+        if not is_valid:
+            return self._unauthorized("Invalid machine-to-machine request signature.")
 
         return await call_next(request)

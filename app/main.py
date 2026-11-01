@@ -37,6 +37,9 @@ def create_app() -> FastAPI:
         description="Agent workflows platform powered by FastAPI, LangChain, and LangGraph",
         version="0.1.0",
         lifespan=lifespan,
+        docs_url="/docs" if settings.app_debug else None,
+        redoc_url="/redoc" if settings.app_debug else None,
+        openapi_url="/openapi.json" if settings.app_debug else None,
         swagger_ui_parameters={
             "persistAuthorization": True,
             "displayRequestDuration": True,
