@@ -47,8 +47,8 @@ If lint or tests fail, fix them first.
 ## Testing
 
 > [!IMPORTANT]
-> **⚠️ ALWAYS USE GEMINI FLASH AGENT FOR ALL TESTING. NO THINKING MODELS. NO EXCEPTIONS.**
-> Unit tests, integration tests, browser testing — ALL of it.
+> **⚠️ ALWAYS USE GEMINI FLASH AGENT. NO PRO OR THINKING MODELS. NO EXCEPTIONS.**
+> Testing, commits, PR creation, reviews, and implementations — ALL of it must use Gemini Flash.
 
 - pytest + pytest-asyncio
 - Tests go in `tests/`
