@@ -113,6 +113,7 @@ async def run_resume_combine_job(job_id: str, payload: dict[str, Any]) -> dict[s
     )
     result = parsed.model_dump(mode="json")
     result["resume"] = combined.profile.model_dump(mode="json")
+    result["raw_text"] = combined.profile.raw_text
     result["model_used"] = f"{parsed.model_used}+combine:{combined.model_used}"
     await persist_profile_and_complete_job(job_id, request.uid, result)
     return result

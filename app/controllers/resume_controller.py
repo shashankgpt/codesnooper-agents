@@ -317,5 +317,6 @@ class ResumeController:
             response_time=f"{elapsed_seconds:.2f}s",
             latency_ms=elapsed_ms,
             resume=resume if success else None,
+            raw_text=resume.raw_text if (success and resume) else None,
             error=error,
         )

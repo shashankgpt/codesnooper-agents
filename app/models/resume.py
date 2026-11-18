@@ -109,6 +109,197 @@ class Project(BaseModel):
     url: str | None = Field(default=None, description="Project or repository link")
 
 
+def generate_resume_raw_text(
+    *,
+    full_name: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+    location: str | None = None,
+    linkedin_url: str | None = None,
+    github_url: str | None = None,
+    portfolio_url: str | None = None,
+    summary: str | None = None,
+    skills: list[str] | None = None,
+    experience: list[Any] | None = None,
+    education: list[Any] | None = None,
+    certificates: list[Any] | None = None,
+    projects: list[Any] | None = None,
+    languages: list[str] | None = None,
+) -> str:
+    """Generate a comprehensive plain-text document of all user details for future AI referencing."""
+    sections: list[str] = []
+
+    # 1. Header & Contact Details
+    header_lines: list[str] = []
+    if full_name and full_name.strip():
+        header_lines.append(f"# {full_name.strip()}")
+    contact_parts: list[str] = []
+    if email and email.strip():
+        contact_parts.append(f"Email: {email.strip()}")
+    if phone and phone.strip():
+        contact_parts.append(f"Phone: {phone.strip()}")
+    if location and location.strip():
+        contact_parts.append(f"Location: {location.strip()}")
+    if linkedin_url and linkedin_url.strip():
+        contact_parts.append(f"LinkedIn: {linkedin_url.strip()}")
+    if github_url and github_url.strip():
+        contact_parts.append(f"GitHub: {github_url.strip()}")
+    if portfolio_url and portfolio_url.strip():
+        contact_parts.append(f"Portfolio: {portfolio_url.strip()}")
+    if contact_parts:
+        header_lines.append(" | ".join(contact_parts))
+    if header_lines:
+        sections.append("\n".join(header_lines))
+
+    # 2. Professional Summary
+    if summary and summary.strip():
+        sections.append(f"## Professional Summary\n{summary.strip()}")
+
+    # 3. Technical & Professional Skills
+    if skills:
+        cleaned_skills = [str(s).strip() for s in skills if s and str(s).strip()]
+        if cleaned_skills:
+            sections.append(f"## Skills\n{', '.join(cleaned_skills)}")
+
+    # 4. Work Experience
+    if experience:
+        exp_lines = ["## Work Experience"]
+        for exp in experience:
+            exp_dict = (
+                exp.model_dump()
+                if hasattr(exp, "model_dump")
+                else (exp if isinstance(exp, dict) else {})
+            )
+            title = (exp_dict.get("title") or "Position").strip()
+            company = (exp_dict.get("company") or "Company").strip()
+            exp_loc = (exp_dict.get("location") or "").strip()
+            start_date = (exp_dict.get("start_date") or "").strip()
+            end_date = (
+                exp_dict.get("end_date") or ("Present" if exp_dict.get("is_current") else "")
+            ).strip()
+
+            date_str = ""
+            if start_date and end_date:
+                date_str = f" ({start_date} - {end_date})"
+            elif start_date or end_date:
+                date_str = f" ({start_date or end_date})"
+
+            loc_str = f" | {exp_loc}" if exp_loc else ""
+            exp_lines.append(f"\n### {title} at {company}{date_str}{loc_str}")
+
+            desc = (exp_dict.get("description") or "").strip()
+            if desc:
+                exp_lines.append(desc)
+
+            highlights = exp_dict.get("highlights") or []
+            if isinstance(highlights, list):
+                for h in highlights:
+                    if h and str(h).strip():
+                        exp_lines.append(f"- {str(h).strip()}")
+        if len(exp_lines) > 1:
+            sections.append("\n".join(exp_lines))
+
+    # 5. Education
+    if education:
+        edu_lines = ["## Education"]
+        for edu in education:
+            edu_dict = (
+                edu.model_dump()
+                if hasattr(edu, "model_dump")
+                else (edu if isinstance(edu, dict) else {})
+            )
+            degree = (edu_dict.get("degree") or "").strip()
+            field = (edu_dict.get("field_of_study") or edu_dict.get("field") or "").strip()
+            institution = (
+                edu_dict.get("institution") or edu_dict.get("school") or "Institution"
+            ).strip()
+            start_date = (edu_dict.get("start_date") or "").strip()
+            end_date = (edu_dict.get("end_date") or "").strip()
+
+            date_str = ""
+            if start_date and end_date:
+                date_str = f" ({start_date} - {end_date})"
+            elif start_date or end_date:
+                date_str = f" ({start_date or end_date})"
+
+            deg_field = f"{degree} in {field}".strip(" in ") if (degree or field) else ""
+            header = f"\n### {deg_field} - {institution}" if deg_field else f"\n### {institution}"
+            edu_lines.append(f"{header}{date_str}")
+
+            grade = (edu_dict.get("grade_or_gpa") or "").strip()
+            if grade:
+                edu_lines.append(f"Grade/Honors: {grade}")
+
+            desc = (edu_dict.get("description") or "").strip()
+            if desc:
+                edu_lines.append(desc)
+        if len(edu_lines) > 1:
+            sections.append("\n".join(edu_lines))
+
+    # 6. Projects
+    if projects:
+        proj_lines = ["## Projects"]
+        for proj in projects:
+            proj_dict = (
+                proj.model_dump()
+                if hasattr(proj, "model_dump")
+                else (proj if isinstance(proj, dict) else {})
+            )
+            name = (proj_dict.get("name") or "Project").strip()
+            url = (proj_dict.get("url") or "").strip()
+            url_str = f" ({url})" if url else ""
+            proj_lines.append(f"\n### {name}{url_str}")
+
+            desc = (proj_dict.get("description") or "").strip()
+            if desc:
+                proj_lines.append(desc)
+
+            techs = proj_dict.get("technologies") or []
+            if techs:
+                cleaned_techs = [str(t).strip() for t in techs if t and str(t).strip()]
+                if cleaned_techs:
+                    proj_lines.append(f"Technologies: {', '.join(cleaned_techs)}")
+        if len(proj_lines) > 1:
+            sections.append("\n".join(proj_lines))
+
+    # 7. Certifications
+    if certificates:
+        cert_lines = ["## Certifications"]
+        for cert in certificates:
+            cert_dict = (
+                cert.model_dump()
+                if hasattr(cert, "model_dump")
+                else (cert if isinstance(cert, dict) else {})
+            )
+            name = (cert_dict.get("name") or "Certification").strip()
+            issuer = (
+                cert_dict.get("issuing_organization")
+                or cert_dict.get("issuer")
+                or ""
+            ).strip()
+            date = (cert_dict.get("issue_date") or "").strip()
+            url = (cert_dict.get("credential_url") or "").strip()
+
+            parts = [name]
+            if issuer:
+                parts.append(f"Issued by {issuer}")
+            if date:
+                parts.append(f"Date: {date}")
+            if url:
+                parts.append(f"Credential: {url}")
+            cert_lines.append(f"- {' | '.join(parts)}")
+        if len(cert_lines) > 1:
+            sections.append("\n".join(cert_lines))
+
+    # 8. Languages
+    if languages:
+        cleaned_langs = [str(lang).strip() for lang in languages if lang and str(lang).strip()]
+        if cleaned_langs:
+            sections.append(f"## Languages\n{', '.join(cleaned_langs)}")
+
+    return "\n\n".join(sections).strip()
+
+
 class ResumeSchema(BaseModel):
     """Structured output schema extracted from a resume or profile."""
 
@@ -147,6 +338,38 @@ class ResumeSchema(BaseModel):
     linkedin_url: str | None = Field(default=None, description="LinkedIn profile URL")
     github_url: str | None = Field(default=None, description="GitHub profile URL")
     portfolio_url: str | None = Field(default=None, description="Personal website or portfolio URL")
+    raw_text: str | None = Field(
+        default=None,
+        description="Comprehensive plain text summary of all user details for future AI referencing",
+    )
+
+    def generate_raw_text(self) -> str:
+        """Construct a comprehensive plain text representation of all user details."""
+        return generate_resume_raw_text(
+            full_name=self.full_name,
+            email=self.email,
+            phone=self.phone,
+            location=self.location,
+            linkedin_url=self.linkedin_url,
+            github_url=self.github_url,
+            portfolio_url=self.portfolio_url,
+            summary=self.summary,
+            skills=self.skills,
+            experience=self.experience,
+            education=self.education,
+            certificates=self.certificates,
+            projects=self.projects,
+            languages=self.languages,
+        )
+
+    @model_validator(mode="after")
+    def populate_raw_text(self) -> "ResumeSchema":
+        """Auto-populate raw_text if not explicitly provided."""
+        if not self.raw_text:
+            generated = self.generate_raw_text()
+            if generated:
+                self.raw_text = generated
+        return self
 
     @field_validator("summary", mode="after")
     @classmethod
@@ -280,4 +503,8 @@ class ResumeParseResponse(BaseModel):
         description="Total agent execution duration in milliseconds",
     )
     resume: ResumeSchema | None = Field(default=None, description="Parsed structured resume object")
+    raw_text: str | None = Field(
+        default=None,
+        description="Comprehensive plain text summary of all user details for future AI referencing",
+    )
     error: str | None = Field(default=None, description="Error message if parsing failed")

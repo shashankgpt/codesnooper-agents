@@ -381,6 +381,11 @@ def test_map_linkedin_dict_to_resume_schema() -> None:
     assert "Python" in resume.skills
     assert "English" in resume.languages
     assert resume.portfolio_url == "https://alexmorgan.dev"
+    assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
+    assert resume.raw_text is not None
+    assert "# Alex Morgan" in resume.raw_text
+    assert "TechCorp Solutions" in resume.raw_text
+    assert "Legacy Systems Ltd" in resume.raw_text
 
     # Incomplete about ending with ellipsis into… should not be used as summary
     mock_profile_incomplete = dict(mock_profile)
@@ -392,7 +397,6 @@ def test_map_linkedin_dict_to_resume_schema() -> None:
     mock_profile_incomplete["position"] = ""
     resume_incomplete = map_linkedin_dict_to_resume_schema(mock_profile_incomplete)
     assert resume_incomplete.summary is None
-    assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
 
 
 @pytest.mark.asyncio
@@ -593,6 +597,113 @@ async def test_resume_controller_handles_base64_blob_content() -> None:
             "pdf",
             source_bytes=raw_bytes,
         )
+
+
+def test_resume_schema_auto_generates_raw_text() -> None:
+    """Verify ResumeSchema auto-generates raw_text containing all user details."""
+    from app.models.resume import Certificate, Education, Experience, Project, ResumeSchema
+
+    resume = ResumeSchema(
+        full_name="Sarah Connor",
+        email="sarah.connor@example.com",
+        phone="+1 555-0144",
+        location="Los Angeles, CA",
+        summary="Principal systems engineer with deep distributed systems experience.",
+        skills=["Python", "Go", "Kubernetes", "AWS"],
+        experience=[
+            Experience(
+                company="Cyberdyne Systems",
+                title="Lead Security Architect",
+                location="Sunnyvale, CA",
+                start_date="2020-01",
+                end_date="Present",
+                is_current=True,
+                description="Engineered mission-critical security controls and network isolation.",
+                highlights=["Reduced vulnerability exposure by 80%"],
+            )
+        ],
+        education=[
+            Education(
+                institution="UCLA",
+                degree="Bachelor of Science",
+                field_of_study="Computer Science",
+                start_date="2012",
+                end_date="2016",
+                grade_or_gpa="Honors in distributed computing",
+            )
+        ],
+        certificates=[
+            Certificate(
+                name="AWS Certified Solutions Architect",
+                issuing_organization="Amazon Web Services",
+                issue_date="2021",
+                credential_url="https://aws.amazon.com/verify/123",
+            )
+        ],
+        projects=[
+            Project(
+                name="Resistance Net",
+                description="Encrypted P2P mesh network for distributed resilient communication.",
+                technologies=["Go", "libp2p", "WireGuard"],
+                url="https://github.com/resistance/net",
+            )
+        ],
+        languages=["English", "Spanish"],
+        linkedin_url="https://linkedin.com/in/sarahconnor",
+        github_url="https://github.com/sarahconnor",
+        portfolio_url="https://sarahconnor.tech",
+    )
+
+    assert resume.raw_text is not None
+    raw = resume.raw_text
+
+    # Verify all critical sections exist in raw_text
+    assert "# Sarah Connor" in raw
+    assert "Email: sarah.connor@example.com" in raw
+    assert "Phone: +1 555-0144" in raw
+    assert "Location: Los Angeles, CA" in raw
+    assert "LinkedIn: https://linkedin.com/in/sarahconnor" in raw
+    assert "GitHub: https://github.com/sarahconnor" in raw
+    assert "Portfolio: https://sarahconnor.tech" in raw
+
+    assert "## Professional Summary" in raw
+    assert "Principal systems engineer with deep distributed systems experience." in raw
+
+    assert "## Skills" in raw
+    assert "Python, Go, Kubernetes, AWS" in raw
+
+    assert "## Work Experience" in raw
+    assert "### Lead Security Architect at Cyberdyne Systems (2020-01 - Present) | Sunnyvale, CA" in raw
+    assert "Engineered mission-critical security controls and network isolation." in raw
+    assert "- Reduced vulnerability exposure by 80%" in raw
+
+    assert "## Education" in raw
+    assert "### Bachelor of Science in Computer Science - UCLA (2012 - 2016)" in raw
+    assert "Grade/Honors: Honors in distributed computing" in raw
+
+    assert "## Certifications" in raw
+    assert "AWS Certified Solutions Architect | Issued by Amazon Web Services | Date: 2021 | Credential: https://aws.amazon.com/verify/123" in raw
+
+    assert "## Projects" in raw
+    assert "### Resistance Net (https://github.com/resistance/net)" in raw
+    assert "Technologies: Go, libp2p, WireGuard" in raw
+
+    assert "## Languages" in raw
+    assert "English, Spanish" in raw
+
+
+def test_resume_schema_preserves_custom_raw_text() -> None:
+    """Verify ResumeSchema preserves an explicit raw_text if provided."""
+    from app.models.resume import ResumeSchema
+
+    custom_text = "Custom plain text source of truth provided directly."
+    resume = ResumeSchema(
+        full_name="Jane Doe",
+        email="jane@example.com",
+        raw_text=custom_text,
+    )
+    assert resume.raw_text == custom_text
+
 
 
 
