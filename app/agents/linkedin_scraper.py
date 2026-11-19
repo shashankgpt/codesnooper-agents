@@ -58,7 +58,10 @@ def _format_profile_as_text(profile: dict[str, Any]) -> str:
     sections: list[str] = []
 
     # Name and Headline
-    name = clean_profile.get("name") or f"{clean_profile.get('first_name', '')} {clean_profile.get('last_name', '')}".strip()
+    name = (
+        clean_profile.get("name")
+        or f"{clean_profile.get('first_name', '')} {clean_profile.get('last_name', '')}".strip()
+    )
     if name:
         sections.append(f"Name: {name}")
 
@@ -179,6 +182,20 @@ def _format_profile_as_text(profile: dict[str, Any]) -> str:
     return "\n".join(sections).strip()
 
 
+def cap_recommendation_text(text: str, limit: int = 500) -> str:
+    """Cap recommendation text cleanly at a sentence boundary without corrupting abbreviations."""
+    clean = text.strip()
+    if len(clean) <= limit:
+        return clean
+    window = clean[:limit]
+    for sep in (". ", "! ", "? "):
+        idx = window.rfind(sep)
+        if idx >= limit // 2:
+            return window[: idx + 1]
+    word_cut = window.rsplit(" ", 1)[0].rstrip(".,;:-")
+    return f"{word_cut}."
+
+
 def map_linkedin_dict_to_resume_schema(
     profile: dict[str, Any],
     url: str | None = None,
@@ -245,7 +262,9 @@ def map_linkedin_dict_to_resume_schema(
         for exp in experience_list:
             if not isinstance(exp, dict):
                 continue
-            company = exp.get("company") or exp.get("company_name") or exp.get("subtitle") or "Company"
+            company = (
+                exp.get("company") or exp.get("company_name") or exp.get("subtitle") or "Company"
+            )
             title = exp.get("title") or exp.get("position") or "Role"
             duration = str(exp.get("duration") or "")
             end_val = str(exp.get("end_date") or "")
@@ -299,9 +318,9 @@ def map_linkedin_dict_to_resume_schema(
 
     # Secondary recovery: If public LinkedIn view hides past experience, recover previous companies from recommendations/projects
     known_companies = {exp.company.lower() for exp in experience if exp.company}
-    
+
     # Check recommendations for company mentions (e.g. "at Frontline Education")
-    for rec in (clean_profile.get("recommendations") or []):
+    for rec in clean_profile.get("recommendations") or []:
         rec_text = str(rec)
         rec_match = re.search(
             r"\bat\s+([A-Z][A-Za-z0-9&.\- ]+?(?:Education|Technologies|Technology|Solutions|Systems|Services|Corp|Corporation|Inc|LLC|Pvt|Ltd|TCS|Infosys|Wipro))\b",
@@ -321,12 +340,14 @@ def map_linkedin_dict_to_resume_schema(
                 known_companies.add(cand.lower())
 
     # Check project descriptions for company mentions (e.g. "supported by TCS engineers")
-    for proj in (clean_profile.get("projects") or []):
+    for proj in clean_profile.get("projects") or []:
         if not isinstance(proj, dict):
             continue
         p_desc = str(proj.get("description") or "")
         p_title = str(proj.get("title") or "")
-        tcs_match = re.search(r"\b(TCS|Tata Consultancy Services)\b", p_desc + " " + p_title, re.IGNORECASE)
+        tcs_match = re.search(
+            r"\b(TCS|Tata Consultancy Services)\b", p_desc + " " + p_title, re.IGNORECASE
+        )
         if tcs_match:
             cand = "Tata Consultancy Services (TCS)"
             if cand.lower() not in known_companies and "tcs" not in known_companies:
@@ -355,8 +376,12 @@ def map_linkedin_dict_to_resume_schema(
                     or edu.get("name")
                     or edu.get("subtitle")
                 )
-                degree = edu.get("degree") or edu.get("degree_name") or edu.get("study_type") or None
-                field_of_study = edu.get("field") or edu.get("field_of_study") or edu.get("major") or None
+                degree = (
+                    edu.get("degree") or edu.get("degree_name") or edu.get("study_type") or None
+                )
+                field_of_study = (
+                    edu.get("field") or edu.get("field_of_study") or edu.get("major") or None
+                )
                 start_date = str(edu.get("start_year") or edu.get("start_date") or "") or None
                 end_date = str(edu.get("end_year") or edu.get("end_date") or "") or None
                 desc = edu.get("description") or edu.get("description_html") or None
@@ -381,7 +406,10 @@ def map_linkedin_dict_to_resume_schema(
                             field_of_study = field_match.group(0).strip()
 
                 # Infer technical university degree if missing
-                if institution and ("technical university" in institution.lower() or "institute of technology" in institution.lower()):
+                if institution and (
+                    "technical university" in institution.lower()
+                    or "institute of technology" in institution.lower()
+                ):
                     if not degree:
                         degree = "Bachelor of Technology (B.Tech)"
                     if not field_of_study:
@@ -428,7 +456,7 @@ def map_linkedin_dict_to_resume_schema(
                             name=cert_title,
                             issuing_organization=cert.get("subtitle") or cert.get("authority"),
                             issue_date=cert.get("meta") or cert.get("issue_date"),
-                            url=cert.get("credential_url") or cert.get("url"),
+                            credential_url=cert.get("credential_url") or cert.get("url"),
                             credential_id=cert.get("credential_id"),
                         )
                     )
@@ -476,6 +504,120 @@ def map_linkedin_dict_to_resume_schema(
             elif not portfolio_url:
                 portfolio_url = link_str
 
+    # 13. Narrative Context (Unmapped highlights: headline, recs, awards, pubs, volunteer, courses)
+    narrative_sections: list[str] = []
+
+    headline = clean_profile.get("headline")
+    if (
+        headline
+        and isinstance(headline, str)
+        and headline.strip()
+        and not is_incomplete_text(headline)
+        and (not about_text or headline.strip().lower() not in about_text.lower())
+    ):
+        narrative_sections.append(f"### Headline\n{headline.strip()}")
+
+    recs = clean_profile.get("recommendations") or []
+    if isinstance(recs, list) and recs:
+        rec_lines = ["### Recommendations"]
+        for r in recs[:5]:
+            if isinstance(r, dict):
+                recommender = r.get("recommender") or r.get("name") or "Colleague"
+                text = r.get("text") or r.get("description") or ""
+                if text and isinstance(text, str) and not is_incomplete_text(text):
+                    clean_text = cap_recommendation_text(text, limit=500)
+                    rec_lines.append(f"- **{recommender}**: {clean_text}")
+            elif isinstance(r, str) and r.strip() and not is_incomplete_text(r):
+                clean_r = cap_recommendation_text(r, limit=500)
+                rec_lines.append(f"- {clean_r}")
+        if len(rec_lines) > 1:
+            narrative_sections.append("\n".join(rec_lines))
+
+    awards = clean_profile.get("honors_and_awards") or clean_profile.get("awards") or []
+    if isinstance(awards, list) and awards:
+        award_lines = ["### Honors & Awards"]
+        for a in awards:
+            if isinstance(a, dict):
+                title = a.get("title") or a.get("name") or "Award"
+                issuer = a.get("issuer") or a.get("issuing_organization") or ""
+                raw_desc = a.get("description")
+                desc = (
+                    raw_desc
+                    if isinstance(raw_desc, str) and not is_incomplete_text(raw_desc)
+                    else ""
+                )
+                issuer_str = f" ({issuer})" if issuer else ""
+                desc_str = f": {desc}" if desc else ""
+                award_lines.append(f"- **{title}**{issuer_str}{desc_str}")
+            elif isinstance(a, str) and a.strip() and not is_incomplete_text(a):
+                award_lines.append(f"- {a.strip()}")
+        if len(award_lines) > 1:
+            narrative_sections.append("\n".join(award_lines))
+
+    publications = clean_profile.get("publications") or []
+    if isinstance(publications, list) and publications:
+        pub_lines = ["### Publications"]
+        for p in publications:
+            if isinstance(p, dict):
+                name = p.get("name") or p.get("title") or "Publication"
+                publisher = p.get("publisher") or ""
+                url_p = p.get("url") or ""
+                raw_desc = p.get("description")
+                desc = (
+                    raw_desc
+                    if isinstance(raw_desc, str) and not is_incomplete_text(raw_desc)
+                    else ""
+                )
+                line = f"- **{name}**"
+                if publisher:
+                    line += f" ({publisher})"
+                if url_p:
+                    line += f" [{url_p}]"
+                if desc:
+                    line += f": {desc}"
+                pub_lines.append(line)
+            elif isinstance(p, str) and p.strip() and not is_incomplete_text(p):
+                pub_lines.append(f"- {p.strip()}")
+        if len(pub_lines) > 1:
+            narrative_sections.append("\n".join(pub_lines))
+
+    volunteer = clean_profile.get("volunteer_experience") or clean_profile.get("volunteering") or []
+    if isinstance(volunteer, list) and volunteer:
+        vol_lines = ["### Volunteer Experience"]
+        for v in volunteer:
+            if isinstance(v, dict):
+                role = v.get("role") or v.get("title") or "Volunteer"
+                org = v.get("organization") or v.get("company") or ""
+                cause = v.get("cause") or ""
+                line = f"- **{role}**"
+                if org:
+                    line += f" at {org}"
+                if cause:
+                    line += f" ({cause})"
+                vol_lines.append(line)
+            elif isinstance(v, str) and v.strip() and not is_incomplete_text(v):
+                vol_lines.append(f"- {v.strip()}")
+        if len(vol_lines) > 1:
+            narrative_sections.append("\n".join(vol_lines))
+
+    courses = clean_profile.get("courses") or []
+    if isinstance(courses, list) and courses:
+        course_lines = ["### Courses"]
+        for c in courses:
+            if isinstance(c, dict):
+                raw_name = c.get("name") or c.get("title")
+                c_name = raw_name if isinstance(raw_name, str) else ""
+                raw_num = c.get("number")
+                c_num = raw_num if isinstance(raw_num, str) else ""
+                if c_name and not is_incomplete_text(c_name):
+                    course_lines.append(f"- {c_name}" + (f" ({c_num})" if c_num else ""))
+            elif isinstance(c, str) and c.strip() and not is_incomplete_text(c):
+                course_lines.append(f"- {c.strip()}")
+        if len(course_lines) > 1:
+            narrative_sections.append("\n".join(course_lines))
+
+    narrative_context = "\n\n".join(narrative_sections).strip() if narrative_sections else None
+
     return ResumeSchema(
         full_name=full_name,
         email=email,
@@ -491,6 +633,7 @@ def map_linkedin_dict_to_resume_schema(
         linkedin_url=linkedin_url,
         github_url=github_url,
         portfolio_url=portfolio_url,
+        narrative_context=narrative_context,
     )
 
 

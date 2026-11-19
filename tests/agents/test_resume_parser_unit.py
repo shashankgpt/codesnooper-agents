@@ -17,7 +17,6 @@ from app.models.resume import (
     Experience,
     Project,
     ResumeParseRequest,
-    ResumeParseResponse,
     ResumeSchema,
 )
 
@@ -40,9 +39,15 @@ def test_linkedin_formatter_strips_extraneous_sections() -> None:
         "name": "Jane Doe",
         "position": "Staff Engineer",
         "location": "Bengaluru",
-        "experience": [{"title": "Staff Engineer", "company": "Tech Corp", "dates_employed": "2020-Present"}],
-        "activity": [{"title": "Check out my new post on AI", "link": "https://linkedin.com/post/123"}],
-        "people_also_viewed": [{"name": "Other Person", "profile_link": "https://linkedin.com/in/other"}],
+        "experience": [
+            {"title": "Staff Engineer", "company": "Tech Corp", "dates_employed": "2020-Present"}
+        ],
+        "activity": [
+            {"title": "Check out my new post on AI", "link": "https://linkedin.com/post/123"}
+        ],
+        "people_also_viewed": [
+            {"name": "Other Person", "profile_link": "https://linkedin.com/in/other"}
+        ],
         "similar_profiles": [{"name": "Similar Person"}],
         "articles": [{"title": "My Article"}],
         "posts": [{"title": "My Post"}],
@@ -159,19 +164,22 @@ def test_build_resume_parser_graph() -> None:
 
 def test_resume_parse_api_endpoint_mocked(client: TestClient) -> None:
     """Verify POST /api/v1/resume/parse handles requests and returns ResumeParseJobResponse."""
-    with patch(
-        "app.views.resume.firebase_service.async_create_or_get_resume_job",
-        new_callable=AsyncMock,
-        return_value=("test_job_123", True),
-    ), patch(
-        "app.views.resume.firebase_service.async_set",
-        new_callable=AsyncMock,
-    ), patch(
-        "app.views.resume.spawn_resume_parse",
-        new_callable=AsyncMock,
-    ) as mock_spawn, patch(
-        "app.core.middleware.get_settings"
-    ) as mock_get_settings:
+    with (
+        patch(
+            "app.views.resume.firebase_service.async_create_or_get_resume_job",
+            new_callable=AsyncMock,
+            return_value=("test_job_123", True),
+        ),
+        patch(
+            "app.views.resume.firebase_service.async_set",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.views.resume.spawn_resume_parse",
+            new_callable=AsyncMock,
+        ) as mock_spawn,
+        patch("app.core.middleware.get_settings") as mock_get_settings,
+    ):
         mock_settings = MagicMock()
         mock_settings.m2m_signing_secrets_for_verification = ()
         mock_settings.gateway_tokens = ("test_secret_gateway_token_12345",)
@@ -222,6 +230,7 @@ def test_pii_vault_restores_naked_and_bracketed_placeholders() -> None:
 def test_pii_vault_fails_on_unrestored_residual_placeholder() -> None:
     """Verify PIIVault raises ValueError and find_residuals detects unrestored placeholders."""
     import pytest
+
     from app.core.pii_anonymizer import PIIVault
 
     vault = PIIVault()
@@ -310,7 +319,7 @@ def test_resume_schema_discards_incomplete_summary_and_description() -> None:
 
 
 def test_map_linkedin_dict_to_resume_schema() -> None:
-    """Verify map_linkedin_dict_to_resume_schema accurately maps Bright Data JSON to ResumeSchema."""
+    """Verify map_linkedin_dict_to_resume_schema accurately maps Bright Data JSON."""
     from app.agents.linkedin_scraper import map_linkedin_dict_to_resume_schema
 
     mock_profile = {
@@ -381,6 +390,11 @@ def test_map_linkedin_dict_to_resume_schema() -> None:
     assert "Python" in resume.skills
     assert "English" in resume.languages
     assert resume.portfolio_url == "https://alexmorgan.dev"
+    assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
+    assert resume.raw_text is not None
+    assert "# Alex Morgan" in resume.raw_text
+    assert "TechCorp Solutions" in resume.raw_text
+    assert "Legacy Systems Ltd" in resume.raw_text
 
     # Incomplete about ending with ellipsis into… should not be used as summary
     mock_profile_incomplete = dict(mock_profile)
@@ -392,13 +406,13 @@ def test_map_linkedin_dict_to_resume_schema() -> None:
     mock_profile_incomplete["position"] = ""
     resume_incomplete = map_linkedin_dict_to_resume_schema(mock_profile_incomplete)
     assert resume_incomplete.summary is None
-    assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
 
 
 @pytest.mark.asyncio
 async def test_resume_controller_routes_linkedin_to_python_mapping() -> None:
     """Verify ResumeController routes LinkedIn URLs to python-mapping without LLM."""
     from unittest.mock import AsyncMock, patch
+
     from app.controllers.resume_controller import ResumeController
 
     mock_profile = {
@@ -429,7 +443,7 @@ async def test_resume_controller_routes_linkedin_to_python_mapping() -> None:
 
 @pytest.mark.asyncio
 async def test_resume_controller_routes_linkedin_to_ai_with_pii_vault() -> None:
-    """Verify ResumeController routes to AI agent and uses PIIVault when model='gemini' is requested."""
+    """Verify ResumeController routes to AI agent and uses PIIVault when model='gemini'."""
     from unittest.mock import AsyncMock, patch
 
     from app.controllers.resume_controller import ResumeController
@@ -448,14 +462,17 @@ async def test_resume_controller_routes_linkedin_to_ai_with_pii_vault() -> None:
         experience=[Experience(company="Acme Inc", title="Staff Engineer")],
     )
 
-    with patch(
-        "app.controllers.resume_controller.fetch_source_text",
-        new_callable=AsyncMock,
-    ) as mock_fetch, patch.object(
-        controller._graph,
-        "ainvoke",
-        new_callable=AsyncMock,
-    ) as mock_invoke:
+    with (
+        patch(
+            "app.controllers.resume_controller.fetch_source_text",
+            new_callable=AsyncMock,
+        ) as mock_fetch,
+        patch.object(
+            controller._graph,
+            "ainvoke",
+            new_callable=AsyncMock,
+        ) as mock_invoke,
+    ):
         mock_fetch.return_value = (mock_raw_text, "linkedin")
         mock_invoke.return_value = {
             "resume": mock_ai_resume,
@@ -513,17 +530,21 @@ async def test_resume_controller_refetches_blob_when_blob_content_is_none() -> N
         skills=["Python"],
     )
 
-    with patch(
-        "app.controllers.resume_controller.fetch_resume_blob",
-        new_callable=AsyncMock,
-    ) as mock_fetch_blob, patch(
-        "app.controllers.resume_controller.fetch_source_text",
-        new_callable=AsyncMock,
-    ) as mock_fetch_text, patch.object(
-        controller._graph,
-        "ainvoke",
-        new_callable=AsyncMock,
-    ) as mock_invoke:
+    with (
+        patch(
+            "app.controllers.resume_controller.fetch_resume_blob",
+            new_callable=AsyncMock,
+        ) as mock_fetch_blob,
+        patch(
+            "app.controllers.resume_controller.fetch_source_text",
+            new_callable=AsyncMock,
+        ) as mock_fetch_text,
+        patch.object(
+            controller._graph,
+            "ainvoke",
+            new_callable=AsyncMock,
+        ) as mock_invoke,
+    ):
         mock_fetch_blob.return_value = (b"%PDF-1.4 dummy bytes", "pdf")
         mock_fetch_text.return_value = (mock_raw_text, "pdf")
         mock_invoke.return_value = {
@@ -570,14 +591,17 @@ async def test_resume_controller_handles_base64_blob_content() -> None:
         email="{{PII_EMAIL_1}}",
     )
 
-    with patch(
-        "app.controllers.resume_controller.fetch_source_text",
-        new_callable=AsyncMock,
-    ) as mock_fetch_text, patch.object(
-        controller._graph,
-        "ainvoke",
-        new_callable=AsyncMock,
-    ) as mock_invoke:
+    with (
+        patch(
+            "app.controllers.resume_controller.fetch_source_text",
+            new_callable=AsyncMock,
+        ) as mock_fetch_text,
+        patch.object(
+            controller._graph,
+            "ainvoke",
+            new_callable=AsyncMock,
+        ) as mock_invoke,
+    ):
         mock_fetch_text.return_value = (mock_raw_text, "pdf")
         mock_invoke.return_value = {
             "resume": mock_ai_resume,
@@ -595,5 +619,251 @@ async def test_resume_controller_handles_base64_blob_content() -> None:
         )
 
 
+def test_resume_schema_auto_generates_raw_text() -> None:
+    """Verify ResumeSchema auto-generates raw_text containing all user details."""
+    from app.models.resume import Certificate, Education, Experience, Project, ResumeSchema
+
+    resume = ResumeSchema(
+        full_name="Sarah Connor",
+        email="sarah.connor@example.com",
+        phone="+1 555-0144",
+        location="Los Angeles, CA",
+        summary="Principal systems engineer with deep distributed systems experience.",
+        skills=["Python", "Go", "Kubernetes", "AWS"],
+        experience=[
+            Experience(
+                company="Cyberdyne Systems",
+                title="Lead Security Architect",
+                location="Sunnyvale, CA",
+                start_date="2020-01",
+                end_date="Present",
+                is_current=True,
+                description="Engineered mission-critical security controls and network isolation.",
+                highlights=["Reduced vulnerability exposure by 80%"],
+            )
+        ],
+        education=[
+            Education(
+                institution="UCLA",
+                degree="Bachelor of Science",
+                field_of_study="Computer Science",
+                start_date="2012",
+                end_date="2016",
+                grade_or_gpa="Honors in distributed computing",
+            )
+        ],
+        certificates=[
+            Certificate(
+                name="AWS Certified Solutions Architect",
+                issuing_organization="Amazon Web Services",
+                issue_date="2021",
+                credential_url="https://aws.amazon.com/verify/123",
+            )
+        ],
+        projects=[
+            Project(
+                name="Resistance Net",
+                description="Encrypted P2P mesh network for distributed resilient communication.",
+                technologies=["Go", "libp2p", "WireGuard"],
+                url="https://github.com/resistance/net",
+            )
+        ],
+        languages=["English", "Spanish"],
+        linkedin_url="https://linkedin.com/in/sarahconnor",
+        github_url="https://github.com/sarahconnor",
+        portfolio_url="https://sarahconnor.tech",
+    )
+
+    assert resume.raw_text is not None
+    raw = resume.raw_text
+
+    # Verify all critical sections exist in raw_text
+    assert "# Sarah Connor" in raw
+    assert "Email: sarah.connor@example.com" in raw
+    assert "Phone: +1 555-0144" in raw
+    assert "Location: Los Angeles, CA" in raw
+    assert "LinkedIn: https://linkedin.com/in/sarahconnor" in raw
+    assert "GitHub: https://github.com/sarahconnor" in raw
+    assert "Portfolio: https://sarahconnor.tech" in raw
+
+    assert "## Professional Summary" in raw
+    assert "Principal systems engineer with deep distributed systems experience." in raw
+
+    assert "## Skills" in raw
+    assert "Python, Go, Kubernetes, AWS" in raw
+
+    assert "## Work Experience" in raw
+    assert (
+        "### Lead Security Architect at Cyberdyne Systems (2020-01 - Present) | Sunnyvale, CA"
+        in raw
+    )
+    assert "Engineered mission-critical security controls and network isolation." in raw
+    assert "- Reduced vulnerability exposure by 80%" in raw
+
+    assert "## Education" in raw
+    assert "### Bachelor of Science in Computer Science - UCLA (2012 - 2016)" in raw
+    assert "Grade/Honors: Honors in distributed computing" in raw
+
+    assert "## Certifications" in raw
+    assert (
+        "AWS Certified Solutions Architect | Issued by Amazon Web Services | "
+        "Date: 2021 | Credential: https://aws.amazon.com/verify/123"
+    ) in raw
+
+    assert "## Projects" in raw
+    assert "### Resistance Net (https://github.com/resistance/net)" in raw
+    assert "Technologies: Go, libp2p, WireGuard" in raw
+
+    assert "## Languages" in raw
+    assert "English, Spanish" in raw
 
 
+def test_resume_schema_preserves_custom_raw_text() -> None:
+    """Verify ResumeSchema preserves an explicit raw_text if provided."""
+    from app.models.resume import ResumeSchema
+
+    custom_text = "Custom plain text source of truth provided directly."
+    resume = ResumeSchema(
+        full_name="Jane Doe",
+        email="jane@example.com",
+        raw_text=custom_text,
+    )
+    assert resume.raw_text == custom_text
+
+
+def test_resume_schema_narrative_context_rendering_and_refresh() -> None:
+    """Verify narrative_context renders after Professional Summary and refresh_raw_text works."""
+    from app.models.resume import ResumeSchema
+
+    resume = ResumeSchema(
+        full_name="Jane Doe",
+        summary="Expert software engineer with 10 years experience.",
+        narrative_context="Winner of Global Hackathon 2024.\nKeynote speaker at PyCon.",
+        skills=["Python", "FastAPI"],
+    )
+
+    assert resume.raw_text is not None
+    raw = resume.raw_text
+    summary_idx = raw.find("## Professional Summary")
+    narrative_idx = raw.find("## Additional Context & Highlights")
+    skills_idx = raw.find("## Skills")
+
+    assert summary_idx != -1
+    assert narrative_idx != -1
+    assert skills_idx != -1
+    assert summary_idx < narrative_idx < skills_idx
+    assert "Winner of Global Hackathon 2024." in raw
+
+    # Test refresh_raw_text
+    resume.narrative_context = "Updated narrative: Published research paper on AI agents."
+    refreshed = resume.refresh_raw_text()
+    assert refreshed is resume
+    assert "Updated narrative: Published research paper on AI agents." in resume.raw_text
+    assert "Winner of Global Hackathon 2024." not in resume.raw_text
+
+
+def test_map_linkedin_dict_extracts_narrative_context() -> None:
+    """Verify map_linkedin_dict extracts headline, recs, awards into narrative_context."""
+    from app.agents.linkedin_scraper import map_linkedin_dict_to_resume_schema
+
+    profile_dict = {
+        "name": "Jane Doe",
+        "headline": "Distinguished Architect & Fellow",
+        "about": "Passionate about building large scale systems.",
+        "recommendations": [
+            {"recommender": "Alice Smith", "text": "Jane is an exceptional engineer."},
+        ],
+        "honors_and_awards": [
+            {"title": "Best Innovator", "issuer": "Tech Corp", "description": "Outstanding impact"},
+        ],
+        "publications": [
+            {
+                "name": "Distributed Systems at Scale",
+                "publisher": "ACM",
+                "url": "https://doi.org/123",
+            },
+        ],
+        "volunteer_experience": [
+            {"role": "Mentor", "organization": "Girls Who Code", "cause": "Education"},
+        ],
+        "courses": [
+            {"name": "Advanced Algorithms", "number": "CS401"},
+        ],
+    }
+
+    schema = map_linkedin_dict_to_resume_schema(profile_dict, "https://linkedin.com/in/janedoe")
+    assert schema.narrative_context is not None
+    nc = schema.narrative_context
+    assert "### Headline" in nc
+    assert "Distinguished Architect & Fellow" in nc
+    assert "### Recommendations" in nc
+    assert "Alice Smith" in nc
+    assert "Jane is an exceptional engineer." in nc
+    assert "### Honors & Awards" in nc
+    assert "Best Innovator" in nc
+    assert "### Publications" in nc
+    assert "Distributed Systems at Scale" in nc
+    assert "### Volunteer Experience" in nc
+    assert "Girls Who Code" in nc
+    assert "### Courses" in nc
+    assert "Advanced Algorithms" in nc
+
+    # And verify narrative_context rendered in raw_text
+    assert schema.raw_text is not None
+    assert "## Additional Context & Highlights" in schema.raw_text
+
+
+def test_cap_recommendation_text() -> None:
+    """Verify cap_recommendation_text handles short, Dr. abbreviations, and long texts cleanly."""
+    from app.agents.linkedin_scraper import cap_recommendation_text
+
+    # 1. Short text unchanged
+    assert cap_recommendation_text("Great engineer.") == "Great engineer."
+
+    # 2. Text with Dr. abbreviation at beginning does not truncate prematurely
+    dr_text = (
+        "Dr. Smith worked closely with Jane on high-scale distributed systems and data pipelines. "
+        "Her analytical capabilities and architectural insights significantly improved our team. "
+        "She consistently demonstrated exemplary technical leadership throughout the multi-year "
+        "engagement and delivered exceptional results across every complex milestone."
+    )
+    long_dr_text = dr_text + " " + dr_text  # > 500 chars
+    capped = cap_recommendation_text(long_dr_text, limit=300)
+    assert not capped.endswith("Dr.")
+    assert capped.endswith(".")
+    assert len(capped) <= 300
+    assert "Dr. Smith" in capped
+
+    # 3. Text with no period cuts cleanly at last word and appends period
+    no_period_text = "word " * 120
+    capped_no_period = cap_recommendation_text(no_period_text, limit=100)
+    assert len(capped_no_period) <= 101
+    assert capped_no_period.endswith(".")
+    assert not capped_no_period.endswith(" .")
+
+
+def test_validate_narrative_context_line_by_line_and_orphan_headings() -> None:
+    """Verify line-by-line truncation filtering and orphan heading pruning."""
+    from app.models.resume import ReconciledNarrativeOutput, ResumeSchema
+
+    # Line 2 is truncated with ..., but line 1 and 3 are intact
+    raw_nc = (
+        "### Recommendations\n"
+        "- Alice: Great engineer and leader.\n"
+        "- Bob: Working on distributed sys...\n"
+        "- Charlie: Exceptional problem solver.\n\n"
+        "### Honors & Awards\n"
+        "- Truncated award that cuts off..."
+    )
+    schema = ResumeSchema(full_name="Jane Doe", narrative_context=raw_nc)
+    assert schema.narrative_context is not None
+    nc = schema.narrative_context
+    assert "- Alice: Great engineer and leader." in nc
+    assert "- Charlie: Exceptional problem solver." in nc
+    assert "Bob" not in nc
+    # The Honors & Awards section only had a truncated bullet, so its header should be pruned
+    assert "### Honors & Awards" not in nc
+
+    # Verify ReconciledNarrativeOutput applies the same cleaner
+    rec_out = ReconciledNarrativeOutput(narrative_context=raw_nc)
+    assert rec_out.narrative_context == nc

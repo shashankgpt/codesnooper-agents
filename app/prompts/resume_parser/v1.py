@@ -29,6 +29,11 @@ Extraction Guidelines:
 8. Links & Languages: Capture LinkedIn, GitHub, portfolio links, and spoken/written languages.
 9. Truthfulness & Completeness: Never hallucinate. Extract only what is present in the text.
    If a field is missing, or is incomplete/truncated (ending in '…' or '...'), return null.
+10. Narrative Context & Unmapped Highlights:
+    - If the source contains rich narrative highlights, recommendations, honors/awards,
+      publications, courses, volunteer work, or context that does not fit neatly into standard
+      experience/education/project fields, capture them cleanly as markdown in narrative_context.
+    - If no such unmapped highlights exist, return null. Do NOT duplicate standard bullets.
 """
 
 USER_PROMPT_TEMPLATE = """Please parse the following resume / profile text:

@@ -50,7 +50,11 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
     """Execute a resume parser request and persist its pollable result."""
     from app.config import get_settings
     from app.controllers.resume_controller import ResumeController
-    from app.core.resume_jobs import persist_profile_and_complete_job, run_resume_combine_job
+    from app.core.resume_jobs import (
+        persist_profile_and_complete_job,
+        run_resume_combine_job,
+        run_resume_sync_job,
+    )
     from app.models.resume import ResumeParseRequest
     from app.repositories.firebase_client import firebase_service
 
@@ -63,6 +67,8 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
     try:
         if agent_name == "resume_combine":
             result = await run_resume_combine_job(task_id, payload)
+        elif agent_name == "resume_sync":
+            result = await run_resume_sync_job(task_id, payload)
         elif agent_name == "resume_parse":
             request = ResumeParseRequest.model_validate(payload)
             response = await ResumeController(get_settings()).parse_resume(request)

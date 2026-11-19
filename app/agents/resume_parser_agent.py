@@ -17,8 +17,8 @@ from pypdf import PdfReader
 
 from app.agents.base import create_llm_for_provider
 from app.agents.linkedin_scraper import fetch_linkedin_profile
-from app.core.pii_anonymizer import PIIVault, anonymize_content
-from app.models.resume import ResumeSchema
+from app.core.pii_anonymizer import anonymize_content
+from app.models.resume import ResumeExtractionSchema, ResumeSchema
 from app.prompts.resume_parser import DEFAULT_PROMPT_VERSION, get_resume_prompts
 
 logger = logging.getLogger(__name__)
@@ -135,9 +135,7 @@ async def extract_word_text(content: bytes, document_type: Literal["doc", "docx"
     if document_type == "docx":
         document = Document(io.BytesIO(content))
         paragraphs = [
-            paragraph.text.strip()
-            for paragraph in document.paragraphs
-            if paragraph.text.strip()
+            paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()
         ]
         for table in document.tables:
             paragraphs.extend(
@@ -190,9 +188,8 @@ async def fetch_html_text(url: str, timeout: float = 30.0) -> str:
     cleaned_text = "\n".join(lines)
 
     if json_ld_blocks:
-        cleaned_text = (
-            f"{cleaned_text}\n\n--- STRUCTURED PROFILE METADATA ---\n"
-            + "\n".join(json_ld_blocks)
+        cleaned_text = f"{cleaned_text}\n\n--- STRUCTURED PROFILE METADATA ---\n" + "\n".join(
+            json_ld_blocks
         )
 
     if not cleaned_text:
@@ -270,8 +267,6 @@ async def fetch_content_node(state: ResumeParserState) -> ResumeParserState:
         }
 
 
-
-
 async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
     """Run LLM with structured output to parse text into ResumeSchema asynchronously."""
     content = state.get("anonymized_content") or state.get("raw_content")
@@ -286,7 +281,7 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
     prompts = get_resume_prompts(prompt_version)
 
     llm = create_llm_for_provider(provider=model_name)
-    structured_llm = llm.with_structured_output(ResumeSchema, include_raw=True)
+    structured_llm = llm.with_structured_output(ResumeExtractionSchema, include_raw=True)
 
     # Allow full multi-page resumes (up to 150,000 characters) without cutting off earlier jobs
     truncated_content = content[:150000]
@@ -305,14 +300,18 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
             resume_obj: ResumeSchema | None = None
 
             # 1. Try directly parsed output
-            if isinstance(result, ResumeSchema):
-                resume_obj = result
+            if isinstance(result, ResumeExtractionSchema):
+                resume_obj = result.to_resume_schema()
+            elif isinstance(result, ResumeSchema):
+                resume_obj = result.refresh_raw_text()
             elif isinstance(result, dict):
                 parsed = result.get("parsed")
-                if isinstance(parsed, ResumeSchema):
-                    resume_obj = parsed
+                if isinstance(parsed, ResumeExtractionSchema):
+                    resume_obj = parsed.to_resume_schema()
+                elif isinstance(parsed, ResumeSchema):
+                    resume_obj = parsed.refresh_raw_text()
                 elif isinstance(parsed, dict):
-                    resume_obj = ResumeSchema.model_validate(parsed)
+                    resume_obj = ResumeExtractionSchema.model_validate(parsed).to_resume_schema()
 
                 # 2. Fallback: inspect raw message for tool_calls or JSON content if parsed was None
                 if resume_obj is None:
@@ -321,12 +320,14 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
                         args = raw.tool_calls[0].get("args", {})
                         if isinstance(args, str):
                             args = json.loads(args)
-                        resume_obj = ResumeSchema.model_validate(args)
+                        resume_obj = ResumeExtractionSchema.model_validate(args).to_resume_schema()
                     elif hasattr(raw, "content") and raw.content:
                         raw_text = raw.content if isinstance(raw.content, str) else str(raw.content)
                         match = re.search(r"\{.*\}", raw_text, re.DOTALL)
                         if match:
-                            resume_obj = ResumeSchema.model_validate_json(match.group(0))
+                            resume_obj = ResumeExtractionSchema.model_validate_json(
+                                match.group(0)
+                            ).to_resume_schema()
 
             if resume_obj is None:
                 raise ValueError("LLM returned empty or unparseable structured output")
@@ -365,8 +366,6 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
     }
 
 
-
-
 def route_after_fetch(state: ResumeParserState) -> str:
     """Route to parse_resume if content exists, otherwise terminate with error."""
     has_content = bool(state.get("anonymized_content") or state.get("raw_content"))
@@ -400,5 +399,3 @@ def build_resume_parser_graph():
     workflow.add_edge("parse_resume", END)
 
     return workflow.compile()
-
-

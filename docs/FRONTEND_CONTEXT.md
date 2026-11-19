@@ -132,15 +132,16 @@ x-user-email: <user_email>
 | `portfolios` | Public portfolio pages | Frontend only |
 | `site_settings` | Global app configuration | Frontend only |
 
-### Firebase Firestore (Agents-Managed)
+### Firebase Firestore (Agents & Shared Career Profile)
 
 | Path | Description | Used By |
 |:---|:---|:---|
-| `resume_parse_jobs/{job_id}` | Background resume parse job status and result | Agents backend, polled by frontend |
+| `profile/{uid}` | Master unified career profile (`JSON` schema + `narrative_context` + deterministic `raw_text`) | Read by Frontend AI & Career Profile; updated via Career Profile (`authoritative`) and Agents background sync (`additive` / `authoritative`) |
+| `resume_parse_jobs/{job_id}` | Background resume parse & sync job status and result | Agents backend, polled by frontend (import) or fire-and-forget (sync) |
 
 > **Note:** Both the frontend and agents backend use **Firestore** in the same
-> Firebase project. The agents store temporary resume job state in the
-> `resume_parse_jobs` collection.
+> Firebase project. Master career profiles live under `profile/{uid}` with
+> dual living state (`JSON` + `raw_text`), while background jobs use `resume_parse_jobs`.
 
 ---
 
@@ -178,11 +179,12 @@ They do **not** call the agents backend.
 
 | Feature | Handled By | Rationale |
 |:---|:---|:---|
-| Cover letter generation | Frontend (LangChain.js) | Simple streaming, low latency |
-| Bio rewrite / text improvement | Frontend (LangChain.js) | Simple streaming, low latency |
+| Cover letter generation | Frontend (LangChain.js) | Simple streaming, low latency, grounded by `profile/{uid}` `raw_text` |
+| Bio rewrite / text improvement | Frontend (LangChain.js) | Simple streaming, low latency, grounded by `profile/{uid}` `raw_text` |
 | Job description parsing | Frontend (LangChain.js) | In-context with resume data |
-| ATS matchability scoring | Frontend (LangChain.js) | In-context with resume data |
+| ATS matchability scoring | Frontend (LangChain.js) | In-context with resume data and `profile/{uid}` `raw_text` |
 | **Career profile parsing** | **Agents backend** | Public resume/LinkedIn URLs and private uploaded PDF, DOC, or DOCX files; PII protection and multi-step parsing |
+| **Career profile sync** | **Agents backend** | `POST /api/v1/resume/sync` for `additive` and `authoritative` profile consolidation |
 
 ### Why Some Features Need the Agents Backend
 
