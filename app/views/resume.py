@@ -12,6 +12,7 @@ from app.models.resume import (
     ResumeParseRequest,
     ResumeParseResponse,
     ResumeSchema,
+    ResumeSyncJobRequest,
 )
 from app.repositories.firebase_client import firebase_service
 
@@ -33,16 +34,20 @@ class ResumeParseJobStatusResponse(BaseModel):
 def _request_uid(request: Request) -> str:
     uid = request.headers.get("x-user-id", "").strip()
     if not uid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-User-Id header")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-User-Id header"
+        )
     return uid
 
 
-async def _create_or_reuse_job(
-    request: Request, job_data: dict[str, Any]
-) -> tuple[str, bool]:
+async def _create_or_reuse_job(request: Request, job_data: dict[str, Any]) -> tuple[str, bool]:
     idempotency_key = request.headers.get("idempotency-key", "").strip() or None
-    if idempotency_key and (len(idempotency_key) > 128 or any(char.isspace() for char in idempotency_key)):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Idempotency-Key header")
+    if idempotency_key and (
+        len(idempotency_key) > 128 or any(char.isspace() for char in idempotency_key)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Idempotency-Key header"
+        )
     return await firebase_service.async_create_or_get_resume_job(
         uuid4().hex, idempotency_key, job_data
     )
@@ -59,7 +64,9 @@ async def combine_resume_profiles(
 ) -> ResumeParseJobResponse:
     """Validate profile state, then queue source parsing and profile combination."""
     if _request_uid(raw_request) != request.uid:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request"
+        )
     try:
         current_profile = await firebase_service.async_get(f"profile/{request.uid}")
         if not current_profile:
@@ -112,6 +119,49 @@ async def combine_resume_profiles(
 
 
 @router.post(
+    "/resume/sync",
+    response_model=ResumeParseJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start an asynchronous career profile sync job",
+)
+async def sync_career_profile(
+    request: ResumeSyncJobRequest, raw_request: Request
+) -> ResumeParseJobResponse:
+    """Validate user and queue background career profile synchronization."""
+    if _request_uid(raw_request) != request.uid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request"
+        )
+
+    payload = request.model_dump(mode="json")
+    job_id, created = await _create_or_reuse_job(
+        raw_request,
+        {
+            "uid": request.uid,
+            "status": "queued",
+            "result": None,
+            "job_type": "resume_sync",
+            "updated_at": datetime.now(UTC).isoformat(),
+            "idempotency_key": raw_request.headers.get("idempotency-key"),
+        },
+    )
+    if not created:
+        return ResumeParseJobResponse(job_id=job_id, status="queued")
+    try:
+        await spawn_resume_parse(job_id, payload, agent_name="resume_sync")
+    except Exception as exc:
+        logger.exception("Could not dispatch profile sync job %s", job_id)
+        await firebase_service.async_merge(
+            f"resume_parse_jobs/{job_id}", {"status": "failed", "result": {"error": str(exc)}}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not start profile synchronization",
+        ) from exc
+    return ResumeParseJobResponse(job_id=job_id, status="queued")
+
+
+@router.post(
     "/resume/parse",
     response_model=ResumeParseJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -127,7 +177,9 @@ async def parse_resume(
 ) -> ResumeParseJobResponse:
     """Queue a resume parse from a public URL or a private uploaded Blob."""
     if _request_uid(raw_request) != request.uid:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request"
+        )
     payload = request.model_dump(mode="json")
     job_id, created = await _create_or_reuse_job(
         raw_request,
