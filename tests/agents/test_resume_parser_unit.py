@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -160,16 +160,29 @@ def test_build_resume_parser_graph() -> None:
 def test_resume_parse_api_endpoint_mocked(client: TestClient) -> None:
     """Verify POST /api/v1/resume/parse handles requests and returns ResumeParseJobResponse."""
     with patch(
+        "app.views.resume.firebase_service.async_create_or_get_resume_job",
+        new_callable=AsyncMock,
+        return_value=("test_job_123", True),
+    ), patch(
         "app.views.resume.firebase_service.async_set",
         new_callable=AsyncMock,
     ), patch(
         "app.views.resume.spawn_resume_parse",
         new_callable=AsyncMock,
-    ) as mock_spawn:
-        token = get_settings().api_gateway_token
+    ) as mock_spawn, patch(
+        "app.core.middleware.get_settings"
+    ) as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.m2m_signing_secrets_for_verification = ()
+        mock_settings.gateway_tokens = ("test_secret_gateway_token_12345",)
+        mock_settings.api_gateway_token = "test_secret_gateway_token_12345"
+        mock_get_settings.return_value = mock_settings
         response = client.post(
             "/api/v1/resume/parse",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Authorization": "Bearer test_secret_gateway_token_12345",
+                "X-User-Id": "test_uid_123",
+            },
             json={
                 "uid": "test_uid_123",
                 "url": "https://example.com/alex_resume.pdf",
@@ -256,6 +269,46 @@ def test_resume_schema_normalizes_dummy_phone_numbers() -> None:
     assert resume_valid.phone == "+1 415-555-2671"
 
 
+def test_resume_schema_discards_incomplete_summary_and_description() -> None:
+    """Verify ResumeSchema sets incomplete summaries and descriptions to None."""
+    from app.models.resume import Experience, ResumeSchema, is_incomplete_text
+
+    incomplete_summary = (
+        "I'm a Lead Engineer with 10+ years of experience modernizing legacy systems into…"
+    )
+    assert is_incomplete_text(incomplete_summary) is True
+    assert is_incomplete_text("Experienced engineer specializing in cloud systems.") is False
+
+    resume = ResumeSchema(
+        full_name="Alex Morgan",
+        summary=incomplete_summary,
+        experience=[
+            Experience(
+                company="TechCorp",
+                title="Lead Engineer",
+                description="Modernizing legacy systems into…",
+            )
+        ],
+    )
+    assert resume.summary is None
+    assert resume.experience[0].description is None
+
+    # Ellipsis with dots
+    resume_dots = ResumeSchema(
+        full_name="Alex Morgan",
+        summary="Working on distributed systems and...",
+    )
+    assert resume_dots.summary is None
+
+    # Complete summary is preserved
+    complete_summary = "Lead Engineer with 10+ years of experience modernizing legacy systems."
+    resume_complete = ResumeSchema(
+        full_name="Alex Morgan",
+        summary=complete_summary,
+    )
+    assert resume_complete.summary == complete_summary
+
+
 def test_map_linkedin_dict_to_resume_schema() -> None:
     """Verify map_linkedin_dict_to_resume_schema accurately maps Bright Data JSON to ResumeSchema."""
     from app.agents.linkedin_scraper import map_linkedin_dict_to_resume_schema
@@ -328,6 +381,17 @@ def test_map_linkedin_dict_to_resume_schema() -> None:
     assert "Python" in resume.skills
     assert "English" in resume.languages
     assert resume.portfolio_url == "https://alexmorgan.dev"
+
+    # Incomplete about ending with ellipsis into… should not be used as summary
+    mock_profile_incomplete = dict(mock_profile)
+    mock_profile_incomplete["about"] = (
+        "I'm a Lead Engineer with 10+ years of experience modernizing legacy systems into…"
+    )
+    mock_profile_incomplete["headline"] = ""
+    mock_profile_incomplete["summary"] = ""
+    mock_profile_incomplete["position"] = ""
+    resume_incomplete = map_linkedin_dict_to_resume_schema(mock_profile_incomplete)
+    assert resume_incomplete.summary is None
     assert resume.linkedin_url == "https://www.linkedin.com/in/alexmorgan"
 
 

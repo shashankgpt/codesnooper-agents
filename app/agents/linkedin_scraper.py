@@ -21,6 +21,7 @@ from app.models.resume import (
     Experience,
     Project,
     ResumeSchema,
+    is_incomplete_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,18 +200,27 @@ def map_linkedin_dict_to_resume_schema(
     location = clean_profile.get("city") or clean_profile.get("location") or None
 
     # 3. Summary
-    about_text = (
-        clean_profile.get("about")
-        or clean_profile.get("summary")
-        or clean_profile.get("headline")
-        or clean_profile.get("position")
-        or None
-    )
+    about_text = None
+    for cand in [
+        clean_profile.get("about"),
+        clean_profile.get("summary"),
+        clean_profile.get("headline"),
+        clean_profile.get("position"),
+    ]:
+        if cand and isinstance(cand, str) and cand.strip() and not is_incomplete_text(cand):
+            about_text = cand.strip()
+            break
 
     # 4. Email extraction (from email field or regex in about section)
     email = clean_profile.get("email")
-    if not email and about_text:
-        email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", about_text)
+    raw_about = (
+        clean_profile.get("about")
+        or clean_profile.get("summary")
+        or clean_profile.get("headline")
+        or ""
+    )
+    if not email and isinstance(raw_about, str) and raw_about:
+        email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", raw_about)
         if email_match:
             email = email_match.group(0).strip()
 

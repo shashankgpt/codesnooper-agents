@@ -3,6 +3,22 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+TRUNCATED_PATTERN = re.compile(
+    r"(?:\.{2,}|…|&hellip;)\s*$|"
+    r"\b(into|in|to|with|and|or|for|of|at|by|from|as|the|a|an)\s*(?:\.{2,}|…|&hellip;)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_incomplete_text(text: str | None) -> bool:
+    """Return True if the text is truncated, cut off, or ends with an ellipsis."""
+    if not text:
+        return False
+    clean = text.strip()
+    if not clean:
+        return False
+    return bool(TRUNCATED_PATTERN.search(clean))
+
 
 class Experience(BaseModel):
     """Work experience entry."""
@@ -25,6 +41,14 @@ class Experience(BaseModel):
     highlights: list[str] = Field(
         default_factory=list, description="Key accomplishment bullet points"
     )
+
+    @field_validator("description", mode="after")
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        """Discard incomplete or cut-off descriptions ending with ellipsis or cut off."""
+        if v and is_incomplete_text(v):
+            return None
+        return v
 
     @field_validator("highlights", mode="before")
     @classmethod
@@ -123,6 +147,14 @@ class ResumeSchema(BaseModel):
     linkedin_url: str | None = Field(default=None, description="LinkedIn profile URL")
     github_url: str | None = Field(default=None, description="GitHub profile URL")
     portfolio_url: str | None = Field(default=None, description="Personal website or portfolio URL")
+
+    @field_validator("summary", mode="after")
+    @classmethod
+    def validate_summary(cls, v: str | None) -> str | None:
+        """Discard incomplete or cut-off summary ending with ellipsis or cut off."""
+        if v and is_incomplete_text(v):
+            return None
+        return v
 
     @field_validator("phone", mode="after")
     @classmethod
