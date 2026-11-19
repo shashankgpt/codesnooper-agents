@@ -143,29 +143,20 @@ async def persist_synced_profile_and_complete_job(
     if mode == "authoritative":
         if not latest_doc:
             result["skipped"] = "profile_not_found"
-            await firebase_service.async_merge(
-                f"resume_parse_jobs/{job_id}",
-                {
-                    "status": "completed",
-                    "result": result,
-                    "updated_at": now,
-                },
-            )
-            return
-
-        # Merge only narrative_context onto latest structured fields in Firestore
-        new_narrative = profile_data.get("narrative_context")
-        merged_doc = {**latest_doc, "narrative_context": new_narrative}
-        # Re-derive raw_text against freshest structured fields to prevent stale overwrites
-        recomputed = ResumeSchema.model_validate(merged_doc).refresh_raw_text()
-        merged_doc["raw_text"] = recomputed.raw_text
-        merged_doc["updatedAt"] = now
-        merged_doc["uid"] = uid
-        if last_import_job_id:
-            merged_doc["lastImportJobId"] = last_import_job_id
-        await firebase_service.async_set(profile_path, merged_doc)
-        result["resume"] = recomputed.model_dump(mode="json")
-        result["raw_text"] = recomputed.raw_text
+        else:
+            # Merge only narrative_context onto latest structured fields in Firestore
+            new_narrative = profile_data.get("narrative_context")
+            merged_doc = {**latest_doc, "narrative_context": new_narrative}
+            # Re-derive raw_text against freshest structured fields to prevent stale overwrites
+            recomputed = ResumeSchema.model_validate(merged_doc).refresh_raw_text()
+            merged_doc["raw_text"] = recomputed.raw_text
+            merged_doc["updatedAt"] = now
+            merged_doc["uid"] = uid
+            if last_import_job_id:
+                merged_doc["lastImportJobId"] = last_import_job_id
+            await firebase_service.async_set(profile_path, merged_doc)
+            result["resume"] = recomputed.model_dump(mode="json")
+            result["raw_text"] = recomputed.raw_text
     else:
         # Additive mode: strip None and empty lists, merge with latest doc, and refresh raw_text
         non_empty = {k: v for k, v in profile_data.items() if v is not None and v != []}
