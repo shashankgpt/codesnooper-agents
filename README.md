@@ -199,6 +199,19 @@ Test your deployed endpoint:
 curl https://shashankgpt--codesnooper-agents-fastapi-app.modal.run/api/v1/hello
 ```
 
+### 4. Automated Deployment (CI/CD)
+
+Continuous deployment to Modal is automated via GitHub Actions on push or merge to `main` (`.github/workflows/deploy-modal.yml`).
+
+To enable deployments, configure the following secrets in GitHub (**Settings** → **Secrets and variables** → **Actions**):
+
+| Secret Name | Description |
+|:---|:---|
+| `MODAL_TOKEN_ID` | Modal API Token ID (starts with `ak-`) |
+| `MODAL_TOKEN_SECRET` | Modal API Token Secret (starts with `as-`) |
+
+Generate these credentials in [Modal Settings → API Tokens](https://modal.com/settings). Runtime secrets (`codesnooper-secrets`) are managed separately within Modal's secret vault.
+
 ---
 
 ## Architecture & Code Structure
