@@ -82,9 +82,7 @@ class PortfolioGeneratorAgent:
                                 args = json.loads(args)
                             output = PortfolioGenerationOutput.model_validate(args)
                         elif content:
-                            raw_str = (
-                                content if isinstance(content, str) else str(content)
-                            )
+                            raw_str = content if isinstance(content, str) else str(content)
                             match = re.search(r"\{.*\}", raw_str, re.DOTALL)
                             if match:
                                 output = PortfolioGenerationOutput.model_validate_json(

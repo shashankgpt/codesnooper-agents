@@ -1,12 +1,15 @@
 import asyncio
 import copy
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from langsmith import tracing_context
+
 from app.agents.portfolio_generator_agent import PortfolioGeneratorAgent
-from app.config import Settings
+from app.config import Settings, flush_tracing
 from app.core.pii_anonymizer import PIIVault
 from app.models.portfolio import (
     PortfolioEnhanceOutput,
@@ -45,9 +48,7 @@ class PortfolioController:
             )
         profile_data: dict[str, Any] = cast("dict[str, Any]", raw_profile)
 
-        raw_prefs = await firebase_service.async_get(
-            f"userPreferences/{request.uid}"
-        )
+        raw_prefs = await firebase_service.async_get(f"userPreferences/{request.uid}")
         preferences_data: dict[str, Any] = (
             cast("dict[str, Any]", raw_prefs) if isinstance(raw_prefs, dict) else {}
         )
@@ -61,41 +62,45 @@ class PortfolioController:
 
         # 3. Anonymize PII with PIIVault
         vault = PIIVault()
-        raw_val = safe_profile.get("raw_text") or safe_profile.get("narrative_context")
+        raw_text_val = safe_profile.pop("raw_text", None)
+        narrative_val = safe_profile.pop("narrative_context", None)
+        raw_val = raw_text_val or narrative_val
         raw_text = str(raw_val) if raw_val else ""
-        anonymized_raw_text = vault.anonymize_text(raw_text) if raw_text else None
 
         basic_dict = basic_info if isinstance(basic_info, dict) else {}
         name_val = (
-            safe_profile.get("full_name")
-            or safe_profile.get("name")
-            or basic_dict.get("name")
+            safe_profile.get("full_name") or safe_profile.get("name") or basic_dict.get("name")
         )
-        name_hint = name_val if isinstance(name_val, str) and name_val else "Developer"
-        email_val = safe_profile.get("email") or basic_dict.get("email")
-        email_hint = (
-            email_val
-            if isinstance(email_val, str) and email_val
-            else f"{request.uid}@example.com"
+        name_hint = (
+            str(name_val).strip() if isinstance(name_val, str) and name_val.strip() else None
         )
 
-        name_ph = vault.register("NAME", name_hint)
-        email_ph = vault.register("EMAIL", email_hint)
+        anonymized_raw_text = (
+            vault.anonymize_text(raw_text, candidate_name=name_hint) if raw_text else None
+        )
 
-        if "full_name" in safe_profile:
-            safe_profile["full_name"] = name_ph
-        if "name" in safe_profile:
-            safe_profile["name"] = name_ph
-        if "email" in safe_profile:
-            safe_profile["email"] = email_ph
+        profile_json = json.dumps(safe_profile, ensure_ascii=False)
+        anonymized_profile_json = vault.anonymize_text(profile_json, candidate_name=name_hint)
+        anonymized_profile_data: dict[str, Any] = json.loads(anonymized_profile_json)
 
         # 4. Invoke LangGraph curation agent
-        curated_output = await self.agent.generate_portfolio(
-            profile_data=safe_profile,
-            preferences_data=preferences_data,
-            raw_text=anonymized_raw_text,
-            model=request.model or "gemini",
+        project_name = (
+            None if self.settings.langsmith_uses_agent_address else self.settings.langsmith_project
         )
+        try:
+            with tracing_context(
+                enabled=bool(self.settings.langsmith_api_key and self.settings.langsmith_tracing),
+                project_name=project_name,
+            ):
+                curated_output = await self.agent.generate_portfolio(
+                    profile_data=anonymized_profile_data,
+                    preferences_data=preferences_data,
+                    raw_text=anonymized_raw_text,
+                    model=request.model or "gemini",
+                )
+        finally:
+            if self.settings.langsmith_api_key and self.settings.langsmith_tracing:
+                flush_tracing()
 
         # 5. Restore real PII into curated output
         raw_json = curated_output.model_dump_json(by_alias=True)
@@ -105,9 +110,7 @@ class PortfolioController:
         # Verify zero residual tokens
         residuals = PIIVault.find_residuals_in_text(restored_json)
         if residuals:
-            raise ValueError(
-                f"Restoration failed: residual placeholders remaining: {residuals}"
-            )
+            raise ValueError(f"Restoration failed: residual placeholders remaining: {residuals}")
 
         # 6. Check existing portfolios in Firestore
         existing_doc_id: str | None = None
@@ -115,6 +118,7 @@ class PortfolioController:
         db = firebase_service.firestore
 
         if db:
+
             def _find_user_portfolio() -> tuple[str | None, dict[str, Any] | None]:
                 docs = (
                     db.collection("portfolios")
@@ -137,8 +141,8 @@ class PortfolioController:
         if request.preserve_custom_avatar and existing_doc and existing_doc.get("imageUrl"):
             content_dict["imageUrl"] = existing_doc["imageUrl"]
         elif safe_profile.get("image_url") or safe_profile.get("avatar_url"):
-            content_dict["imageUrl"] = (
-                safe_profile.get("image_url") or safe_profile.get("avatar_url")
+            content_dict["imageUrl"] = safe_profile.get("image_url") or safe_profile.get(
+                "avatar_url"
             )
         else:
             content_dict["imageUrl"] = None
@@ -186,6 +190,7 @@ class PortfolioController:
             slug_name = base_slug
 
             if db:
+
                 def _find_available_slug(candidate: str) -> str:
                     current_slug = candidate
                     counter = 2
@@ -247,18 +252,62 @@ class PortfolioController:
         request: PortfolioEnhanceRequest,
     ) -> PortfolioEnhanceResponse:
         """Polish a specific portfolio section with PII protection."""
-        vault = PIIVault()
-        anonymized_text = vault.anonymize_text(request.current_text)
+        name_hint: str | None = None
+        if request.uid:
+            try:
+                raw_profile = await firebase_service.async_get(f"profile/{request.uid}")
+                if isinstance(raw_profile, dict):
+                    basic_info = raw_profile.get("basicInfo")
+                    basic_dict = basic_info if isinstance(basic_info, dict) else {}
+                    name_val = (
+                        raw_profile.get("full_name")
+                        or raw_profile.get("name")
+                        or basic_dict.get("name")
+                    )
+                    if isinstance(name_val, str) and name_val.strip():
+                        name_hint = name_val.strip()
+            except Exception as e:
+                logger.warning("Could not fetch profile for name_hint: %s", e)
 
-        output: PortfolioEnhanceOutput = await self.agent.enhance_section(
-            section=request.section,
-            current_text=anonymized_text,
-            instruction=request.instruction,
-            model=request.model or "gemini",
+        vault = PIIVault()
+        anonymized_text = vault.anonymize_text(request.current_text, candidate_name=name_hint)
+        anonymized_instruction = (
+            vault.anonymize_text(request.instruction, candidate_name=name_hint)
+            if request.instruction
+            else None
         )
+
+        project_name = (
+            None if self.settings.langsmith_uses_agent_address else self.settings.langsmith_project
+        )
+        try:
+            with tracing_context(
+                enabled=bool(self.settings.langsmith_api_key and self.settings.langsmith_tracing),
+                project_name=project_name,
+            ):
+                output: PortfolioEnhanceOutput = await self.agent.enhance_section(
+                    section=request.section,
+                    current_text=anonymized_text,
+                    instruction=anonymized_instruction,
+                    model=request.model or "gemini",
+                )
+        finally:
+            if self.settings.langsmith_api_key and self.settings.langsmith_tracing:
+                flush_tracing()
 
         restored_text = vault.restore_text(output.enhanced_text)
         restored_bullets = [vault.restore_text(b) for b in output.bullets]
+
+        # Verify zero residual tokens
+        text_residuals = PIIVault.find_residuals_in_text(restored_text)
+        bullet_residuals = [
+            res for b in restored_bullets for res in PIIVault.find_residuals_in_text(b)
+        ]
+        all_residuals = sorted(set(text_residuals + bullet_residuals))
+        if all_residuals:
+            raise ValueError(
+                f"Restoration failed: residual placeholders remaining: {all_residuals}"
+            )
 
         return PortfolioEnhanceResponse(
             success=True,

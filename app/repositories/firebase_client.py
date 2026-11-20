@@ -3,13 +3,17 @@ import json
 import logging
 import os
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.api_core.exceptions import AlreadyExists
+from google.cloud.firestore import transactional
 
 from app.config import get_settings
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -171,9 +175,7 @@ class FirebaseService:
         reference: Any = self._firestore_db
         for index, segment in enumerate(segments):
             reference = (
-                reference.collection(segment)
-                if index % 2 == 0
-                else reference.document(segment)
+                reference.collection(segment) if index % 2 == 0 else reference.document(segment)
             )
         return reference
 
@@ -186,9 +188,7 @@ class FirebaseService:
         reference: Any = self._firestore_db
         for index, segment in enumerate(segments):
             reference = (
-                reference.collection(segment)
-                if index % 2 == 0
-                else reference.document(segment)
+                reference.collection(segment) if index % 2 == 0 else reference.document(segment)
             )
         return reference
 
@@ -226,8 +226,11 @@ class FirebaseService:
             f"resume_parse_job_idempotency/{idempotency_key}"
         )
         transaction = self._firestore_db.transaction()
+        tx_decorator: Callable[
+            [Callable[[Any], tuple[str, bool]]], Callable[[Any], tuple[str, bool]]
+        ] = cast("Any", transactional)
 
-        @firestore.transactional
+        @tx_decorator
         def create_or_get(transaction: Any) -> tuple[str, bool]:
             marker = idempotency_ref.get(transaction=transaction)
             if marker.exists:

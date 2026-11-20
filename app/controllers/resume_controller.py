@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langsmith import tracing_context
@@ -56,6 +56,14 @@ class ResumeController:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._graph = build_resume_parser_graph()
+
+    @property
+    def graph(self) -> Any:
+        return self._graph
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
 
     async def combine_profiles(self, request: ResumeCombineRequest) -> ResumeCombineResponse:
         """Use structured AI output to combine two profiles without changing the schema."""

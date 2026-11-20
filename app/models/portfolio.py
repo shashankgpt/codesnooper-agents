@@ -62,9 +62,7 @@ class PortfolioProject(BaseModel):
     title: str = Field(description="Project title")
     tagline: str | None = Field(default=None, description="Short punchy 1-line tagline")
     description: str = Field(description="Concise technical description of architecture")
-    highlights: list[str] = Field(
-        default_factory=list, description="Key technical achievements"
-    )
+    highlights: list[str] = Field(default_factory=list, description="Key technical achievements")
     tech_stack: list[str] = Field(
         default_factory=list, description="Technologies, languages, and frameworks"
     )
@@ -83,9 +81,7 @@ class PortfolioExperience(BaseModel):
     role: str = Field(description="Job title / role")
     location: str | None = Field(default=None, description="Location or 'Remote'")
     start_date: str = Field(description="Start date (e.g. '2021-01' or '2021')")
-    end_date: str | None = Field(
-        default=None, description="End date (e.g. '2023-05' or 'Present')"
-    )
+    end_date: str | None = Field(default=None, description="End date (e.g. '2023-05' or 'Present')")
     is_current: bool = Field(default=False, description="Whether this is the current role")
     summary: str | None = Field(default=None, description="Optional brief role summary")
     bullets: list[str] = Field(

@@ -10,7 +10,7 @@ This approach:
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -51,7 +51,7 @@ EXCLUDED_PROFILE_KEYS = {
 }
 
 
-def _format_profile_as_text(profile: dict[str, Any]) -> str:
+def format_profile_as_text(profile: dict[str, Any]) -> str:
     """Format Bright Data's LinkedIn JSON into structured text for LLM consumption."""
     # Filter out bulky, irrelevant fields (activity feed, posts, social networks) before prompt generation
     clean_profile = {k: v for k, v in profile.items() if k not in EXCLUDED_PROFILE_KEYS}
@@ -78,50 +78,64 @@ def _format_profile_as_text(profile: dict[str, Any]) -> str:
         sections.append(f"\n--- About / Summary ---\n{about}")
 
     # Experience
-    experience_list = clean_profile.get("experience") or []
+    raw_exp = clean_profile.get("experience")
+    experience_list: list[dict[str, Any]] = (
+        cast("list[dict[str, Any]]", raw_exp) if isinstance(raw_exp, list) else []
+    )
     if experience_list:
         sections.append("\n--- Experience ---")
         for idx, exp in enumerate(experience_list, start=1):
-            title = exp.get("title") or exp.get("position") or "Position"
-            company = exp.get("company") or exp.get("company_name") or "Company"
-            duration = exp.get("duration") or exp.get("dates_employed") or ""
-            desc = exp.get("description") or ""
+            title = str(exp.get("title") or exp.get("position") or "Position")
+            company = str(exp.get("company") or exp.get("company_name") or "Company")
+            duration = str(exp.get("duration") or exp.get("dates_employed") or "")
+            desc = str(exp.get("description") or "")
             exp_text = f"{idx}. {title} at {company} ({duration})"
             if desc:
                 exp_text += f"\n   Details: {desc}"
             sections.append(exp_text)
 
     # Education
-    education_list = clean_profile.get("education") or clean_profile.get("educations_details") or []
-    if education_list:
+    raw_edu = clean_profile.get("education") or clean_profile.get("educations_details")
+    education_list: list[object] = (
+        cast("list[object]", raw_edu) if isinstance(raw_edu, list) else []
+    )
+    if raw_edu:
         sections.append("\n--- Education ---")
-        if isinstance(education_list, list):
+        if education_list:
             for idx, edu in enumerate(education_list, start=1):
                 if isinstance(edu, dict):
-                    school = (
-                        edu.get("title")
-                        or edu.get("school")
-                        or edu.get("institute")
-                        or edu.get("school_name")
-                        or edu.get("name")
-                        or edu.get("subtitle")
+                    edu_dict: dict[str, Any] = cast("dict[str, Any]", edu)
+                    school = str(
+                        edu_dict.get("title")
+                        or edu_dict.get("school")
+                        or edu_dict.get("institute")
+                        or edu_dict.get("school_name")
+                        or edu_dict.get("name")
+                        or edu_dict.get("subtitle")
                         or ""
                     )
-                    degree = edu.get("degree") or edu.get("degree_name") or ""
-                    field = edu.get("field") or edu.get("field_of_study") or edu.get("major") or ""
-                    degree_part = f"{degree} in {field}" if (degree and field) else (degree or field)
+                    degree = str(edu_dict.get("degree") or edu_dict.get("degree_name") or "")
+                    field = str(
+                        edu_dict.get("field")
+                        or edu_dict.get("field_of_study")
+                        or edu_dict.get("major")
+                        or ""
+                    )
+                    degree_part = (
+                        f"{degree} in {field}" if (degree and field) else (degree or field)
+                    )
 
                     # Compute period from period, dates, or start_year/end_year
-                    period = edu.get("period") or edu.get("dates") or ""
+                    period = str(edu_dict.get("period") or edu_dict.get("dates") or "")
                     if not period:
-                        start_y = edu.get("start_year") or edu.get("start_date")
-                        end_y = edu.get("end_year") or edu.get("end_date")
+                        start_y = edu_dict.get("start_year") or edu_dict.get("start_date")
+                        end_y = edu_dict.get("end_year") or edu_dict.get("end_date")
                         if start_y and end_y:
                             period = f"{start_y} - {end_y}"
                         elif start_y or end_y:
-                            period = str(start_y or end_y)
+                            period = str(cast("object", start_y or end_y))
 
-                    desc = edu.get("description") or ""
+                    desc = str(edu_dict.get("description") or "")
                     edu_header = f"{idx}. {school}" if school else f"{idx}. Education"
                     if degree_part:
                         edu_header += f" - {degree_part}"
@@ -132,13 +146,16 @@ def _format_profile_as_text(profile: dict[str, Any]) -> str:
                     sections.append(edu_header)
                 elif isinstance(edu, str):
                     sections.append(f"{idx}. {edu}")
-        elif isinstance(education_list, str):
-            sections.append(education_list)
+        elif isinstance(raw_edu, str):
+            sections.append(raw_edu)
 
     # Skills
-    skills = clean_profile.get("skills") or []
-    if skills:
-        sections.append(f"\n--- Skills ---\n{', '.join(str(s) for s in skills)}")
+    raw_skills = clean_profile.get("skills")
+    skills_list: list[object] = (
+        cast("list[object]", raw_skills) if isinstance(raw_skills, list) else []
+    )
+    if skills_list:
+        sections.append(f"\n--- Skills ---\n{', '.join(str(s) for s in skills_list)}")
 
     # Certifications
     certifications = clean_profile.get("certifications") or []
@@ -194,6 +211,9 @@ def cap_recommendation_text(text: str, limit: int = 500) -> str:
             return window[: idx + 1]
     word_cut = window.rsplit(" ", 1)[0].rstrip(".,;:-")
     return f"{word_cut}."
+
+
+_format_profile_as_text = format_profile_as_text
 
 
 def map_linkedin_dict_to_resume_schema(
@@ -253,47 +273,65 @@ def map_linkedin_dict_to_resume_schema(
         elif isinstance(s, dict):
             s_name = s.get("title") or s.get("name")
             if s_name:
-                skills.append(str(s_name).strip())
+                skills.append(str(cast("object", s_name)).strip())
 
     # 7. Experience
     experience: list[Experience] = []
-    experience_list = clean_profile.get("experience") or []
-    if isinstance(experience_list, list):
-        for exp in experience_list:
-            if not isinstance(exp, dict):
-                continue
-            company = (
-                exp.get("company") or exp.get("company_name") or exp.get("subtitle") or "Company"
-            )
-            title = exp.get("title") or exp.get("position") or "Role"
-            duration = str(exp.get("duration") or "")
-            end_val = str(exp.get("end_date") or "")
-            is_curr = bool(
-                exp.get("is_current")
-                or "present" in end_val.lower()
-                or "present" in duration.lower()
-            )
-            desc = exp.get("description") or exp.get("description_html")
-            highlights: list[str] = []
-            if desc and isinstance(desc, str):
-                highlights = [
-                    line.strip("-•* \t")
-                    for line in desc.splitlines()
-                    if line.strip("-•* \t") and len(line.strip()) > 5
-                ][:5]
+    raw_exp = clean_profile.get("experience")
+    experience_list: list[object] = (
+        cast("list[object]", raw_exp) if isinstance(raw_exp, list) else []
+    )
+    for exp in experience_list:
+        if not isinstance(exp, dict):
+            continue
+        exp_dict: dict[str, Any] = cast("dict[str, Any]", exp)
+        raw_comp = (
+            exp_dict.get("company")
+            or exp_dict.get("company_name")
+            or exp_dict.get("subtitle")
+            or "Company"
+        )
+        company = str(cast("object", raw_comp))
+        raw_title = exp_dict.get("title") or exp_dict.get("position") or "Role"
+        title = str(cast("object", raw_title))
+        raw_dur = exp_dict.get("duration")
+        duration = str(cast("object", raw_dur)) if raw_dur else ""
+        raw_end = exp_dict.get("end_date")
+        end_val = str(cast("object", raw_end)) if raw_end else ""
+        is_curr = bool(
+            exp_dict.get("is_current")
+            or "present" in end_val.lower()
+            or "present" in duration.lower()
+        )
+        raw_desc = exp_dict.get("description") or exp_dict.get("description_html")
+        desc = str(cast("object", raw_desc)) if raw_desc else None
+        highlights: list[str] = []
+        if desc:
+            highlights = [
+                line.strip("-•* \t")
+                for line in desc.splitlines()
+                if line.strip("-•* \t") and len(line.strip()) > 5
+            ][:5]
+        raw_loc = exp_dict.get("location")
+        exp_location = str(cast("object", raw_loc)).strip() if raw_loc else None
+        raw_start = exp_dict.get("start_date") or exp_dict.get("start_year")
+        start_date = str(cast("object", raw_start)).strip() if raw_start else None
+        end_date = (
+            "Present" if is_curr else (str(cast("object", raw_end)).strip() if raw_end else None)
+        )
 
-            experience.append(
-                Experience(
-                    company=company,
-                    title=title,
-                    location=exp.get("location"),
-                    start_date=exp.get("start_date") or exp.get("start_year"),
-                    end_date="Present" if is_curr else exp.get("end_date"),
-                    is_current=is_curr,
-                    description=desc,
-                    highlights=highlights,
-                )
+        experience.append(
+            Experience(
+                company=company,
+                title=title,
+                location=exp_location,
+                start_date=start_date,
+                end_date=end_date,
+                is_current=is_curr,
+                description=desc,
+                highlights=highlights,
             )
+        )
 
     # Fallback to current_company and infer previous companies from projects/recommendations if experience list was empty
     if not experience and clean_profile.get("current_company"):
@@ -310,7 +348,7 @@ def map_linkedin_dict_to_resume_schema(
                     role_title = title_match.group(0).strip()
             experience.append(
                 Experience(
-                    company=curr.get("name"),
+                    company=str(cast("object", curr.get("name"))),
                     title=role_title or "Software Engineer",
                     is_current=True,
                 )
@@ -320,7 +358,9 @@ def map_linkedin_dict_to_resume_schema(
     known_companies = {exp.company.lower() for exp in experience if exp.company}
 
     # Check recommendations for company mentions (e.g. "at Frontline Education")
-    for rec in clean_profile.get("recommendations") or []:
+    raw_recs = clean_profile.get("recommendations")
+    recs_list: list[object] = cast("list[object]", raw_recs) if isinstance(raw_recs, list) else []
+    for rec in recs_list:
         rec_text = str(rec)
         rec_match = re.search(
             r"\bat\s+([A-Z][A-Za-z0-9&.\- ]+?(?:Education|Technologies|Technology|Solutions|Systems|Services|Corp|Corporation|Inc|LLC|Pvt|Ltd|TCS|Infosys|Wipro))\b",
@@ -340,11 +380,16 @@ def map_linkedin_dict_to_resume_schema(
                 known_companies.add(cand.lower())
 
     # Check project descriptions for company mentions (e.g. "supported by TCS engineers")
-    for proj in clean_profile.get("projects") or []:
+    raw_projects = clean_profile.get("projects")
+    projects_list: list[object] = (
+        cast("list[object]", raw_projects) if isinstance(raw_projects, list) else []
+    )
+    for proj in projects_list:
         if not isinstance(proj, dict):
             continue
-        p_desc = str(proj.get("description") or "")
-        p_title = str(proj.get("title") or "")
+        p_dict: dict[str, Any] = cast("dict[str, Any]", proj)
+        p_desc = str(cast("object", p_dict.get("description") or ""))
+        p_title = str(cast("object", p_dict.get("title") or ""))
         tcs_match = re.search(
             r"\b(TCS|Tata Consultancy Services)\b", p_desc + " " + p_title, re.IGNORECASE
         )
@@ -364,145 +409,186 @@ def map_linkedin_dict_to_resume_schema(
 
     # 8. Education
     education: list[Education] = []
-    education_list = clean_profile.get("education") or []
-    if isinstance(education_list, list):
-        for edu in education_list:
-            if isinstance(edu, dict):
-                institution = (
-                    edu.get("title")
-                    or edu.get("school")
-                    or edu.get("institute")
-                    or edu.get("school_name")
-                    or edu.get("name")
-                    or edu.get("subtitle")
-                )
-                degree = (
-                    edu.get("degree") or edu.get("degree_name") or edu.get("study_type") or None
-                )
-                field_of_study = (
-                    edu.get("field") or edu.get("field_of_study") or edu.get("major") or None
-                )
-                start_date = str(edu.get("start_year") or edu.get("start_date") or "") or None
-                end_date = str(edu.get("end_year") or edu.get("end_date") or "") or None
-                desc = edu.get("description") or edu.get("description_html") or None
+    raw_education = clean_profile.get("education")
+    education_list: list[object] = (
+        cast("list[object]", raw_education) if isinstance(raw_education, list) else []
+    )
+    for edu in education_list:
+        if isinstance(edu, dict):
+            edu_dict: dict[str, Any] = cast("dict[str, Any]", edu)
+            raw_inst = (
+                edu_dict.get("title")
+                or edu_dict.get("school")
+                or edu_dict.get("institute")
+                or edu_dict.get("school_name")
+                or edu_dict.get("name")
+                or edu_dict.get("subtitle")
+            )
+            institution = str(cast("object", raw_inst)).strip() if raw_inst else None
+            raw_deg = (
+                edu_dict.get("degree") or edu_dict.get("degree_name") or edu_dict.get("study_type")
+            )
+            degree = str(cast("object", raw_deg)).strip() if raw_deg else None
+            raw_fos = (
+                edu_dict.get("field") or edu_dict.get("field_of_study") or edu_dict.get("major")
+            )
+            field_of_study = str(cast("object", raw_fos)).strip() if raw_fos else None
+            raw_sy = edu_dict.get("start_year") or edu_dict.get("start_date")
+            start_date = str(cast("object", raw_sy)).strip() if raw_sy else None
+            raw_ey = edu_dict.get("end_year") or edu_dict.get("end_date")
+            end_date = str(cast("object", raw_ey)).strip() if raw_ey else None
+            raw_desc = edu_dict.get("description") or edu_dict.get("description_html")
+            desc = str(cast("object", raw_desc)).strip() if raw_desc else None
 
-                # Extract degree or field of study from description if missing
-                if desc and isinstance(desc, str):
-                    if not degree:
-                        deg_match = re.search(
-                            r"\b(B\.?Tech|B\.?E\.?|B\.?S\.?|B\.?Sc|Bachelor[^\n,]*|M\.?Tech|M\.?S\.?|M\.?Sc|Master[^\n,]*|Ph\.?D|Diploma|High School|Senior Secondary)\b",
-                            desc,
-                            re.IGNORECASE,
-                        )
-                        if deg_match:
-                            degree = deg_match.group(0).strip()
-                    if not field_of_study:
-                        field_match = re.search(
-                            r"\b(Computer Science|Information Technology|Mechanical|Electrical|Electronics|Civil|Biotechnology|Business|Commerce|Economics)\b",
-                            desc,
-                            re.IGNORECASE,
-                        )
-                        if field_match:
-                            field_of_study = field_match.group(0).strip()
-
-                # Infer technical university degree if missing
-                if institution and (
-                    "technical university" in institution.lower()
-                    or "institute of technology" in institution.lower()
-                ):
-                    if not degree:
-                        degree = "Bachelor of Technology (B.Tech)"
-                    if not field_of_study:
-                        field_of_study = "Computer Science and Engineering"
-
-                # If institution is missing but schooling dates exist, record as Secondary Education
-                if not institution and (start_date or end_date):
-                    if end_date == "2012":
-                        institution = "Senior Secondary School (12th Grade)"
-                        degree = "Higher Secondary Certificate (12th)"
-                    elif end_date == "2010":
-                        institution = "Secondary School (10th Grade)"
-                        degree = "Secondary School Certificate (10th)"
-                    else:
-                        institution = "Secondary / High School"
-                        degree = "High School"
-
-                if institution or degree or field_of_study:
-                    education.append(
-                        Education(
-                            institution=institution,
-                            degree=degree,
-                            field_of_study=field_of_study,
-                            start_date=start_date,
-                            end_date=end_date,
-                        )
+            # Extract degree or field of study from description if missing
+            if desc:
+                if not degree:
+                    deg_match = re.search(
+                        r"\b(B\.?Tech|B\.?E\.?|B\.?S\.?|B\.?Sc|Bachelor[^\n,]*|M\.?Tech|M\.?S\.?|M\.?Sc|Master[^\n,]*|Ph\.?D|Diploma|High School|Senior Secondary)\b",
+                        desc,
+                        re.IGNORECASE,
                     )
-            elif isinstance(edu, str) and edu.strip():
-                education.append(Education(institution=edu.strip()))
+                    if deg_match:
+                        degree = deg_match.group(0).strip()
+                if not field_of_study:
+                    field_match = re.search(
+                        r"\b(Computer Science|Information Technology|Mechanical|Electrical|Electronics|Civil|Biotechnology|Business|Commerce|Economics)\b",
+                        desc,
+                        re.IGNORECASE,
+                    )
+                    if field_match:
+                        field_of_study = field_match.group(0).strip()
+
+            # Infer technical university degree if missing
+            if institution and (
+                "technical university" in institution.lower()
+                or "institute of technology" in institution.lower()
+            ):
+                if not degree:
+                    degree = "Bachelor of Technology (B.Tech)"
+                if not field_of_study:
+                    field_of_study = "Computer Science and Engineering"
+
+            # If institution is missing but schooling dates exist, record as Secondary Education
+            if not institution and (start_date or end_date):
+                if end_date == "2012":
+                    institution = "Senior Secondary School (12th Grade)"
+                    degree = "Higher Secondary Certificate (12th)"
+                elif end_date == "2010":
+                    institution = "Secondary School (10th Grade)"
+                    degree = "Secondary School Certificate (10th)"
+                else:
+                    institution = "Secondary / High School"
+                    degree = "High School"
+
+            if institution or degree or field_of_study:
+                education.append(
+                    Education(
+                        institution=institution,
+                        degree=degree,
+                        field_of_study=field_of_study,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                )
+        elif isinstance(edu, str) and edu.strip():
+            education.append(Education(institution=edu.strip()))
 
     if not education and clean_profile.get("educations_details"):
-        education.append(Education(institution=str(clean_profile["educations_details"])))
+        raw_ed = clean_profile["educations_details"]
+        education.append(Education(institution=str(cast("object", raw_ed))))
 
     # 9. Certifications
     certificates: list[Certificate] = []
-    certs_list = clean_profile.get("certifications") or []
-    if isinstance(certs_list, list):
-        for cert in certs_list:
-            if isinstance(cert, dict):
-                cert_title = cert.get("title") or cert.get("name")
-                if cert_title:
-                    certificates.append(
-                        Certificate(
-                            name=cert_title,
-                            issuing_organization=cert.get("subtitle") or cert.get("authority"),
-                            issue_date=cert.get("meta") or cert.get("issue_date"),
-                            credential_url=cert.get("credential_url") or cert.get("url"),
-                            credential_id=cert.get("credential_id"),
-                        )
+    raw_certs = clean_profile.get("certifications")
+    certs_list: list[object] = (
+        cast("list[object]", raw_certs) if isinstance(raw_certs, list) else []
+    )
+    for cert in certs_list:
+        if isinstance(cert, dict):
+            cert_dict: dict[str, Any] = cast("dict[str, Any]", cert)
+            raw_title = cert_dict.get("title") or cert_dict.get("name")
+            if raw_title:
+                raw_sub = cert_dict.get("subtitle") or cert_dict.get("authority")
+                raw_meta = cert_dict.get("meta") or cert_dict.get("issue_date")
+                raw_cred_url = cert_dict.get("credential_url") or cert_dict.get("url")
+                raw_cred_id = cert_dict.get("credential_id")
+                certificates.append(
+                    Certificate(
+                        name=str(cast("object", raw_title)).strip(),
+                        issuing_organization=str(cast("object", raw_sub)).strip()
+                        if raw_sub
+                        else None,
+                        issue_date=str(cast("object", raw_meta)).strip() if raw_meta else None,
+                        credential_url=str(cast("object", raw_cred_url)).strip()
+                        if raw_cred_url
+                        else None,
+                        credential_id=str(cast("object", raw_cred_id)).strip()
+                        if raw_cred_id
+                        else None,
                     )
-            elif isinstance(cert, str) and cert.strip():
-                certificates.append(Certificate(name=cert.strip()))
+                )
+        elif isinstance(cert, str) and cert.strip():
+            certificates.append(Certificate(name=cert.strip()))
 
     # 10. Projects
     projects: list[Project] = []
-    projects_list = clean_profile.get("projects") or []
-    if isinstance(projects_list, list):
-        for proj in projects_list:
-            if isinstance(proj, dict):
-                proj_title = proj.get("title") or proj.get("name")
-                if proj_title:
-                    projects.append(
-                        Project(
-                            name=proj_title,
-                            description=proj.get("description"),
-                            url=proj.get("url") or proj.get("link"),
-                        )
+    raw_projects_2 = clean_profile.get("projects")
+    projects_list_2: list[object] = (
+        cast("list[object]", raw_projects_2) if isinstance(raw_projects_2, list) else []
+    )
+    for proj in projects_list_2:
+        if isinstance(proj, dict):
+            proj_dict: dict[str, Any] = cast("dict[str, Any]", proj)
+            raw_proj_title = proj_dict.get("title") or proj_dict.get("name")
+            if raw_proj_title:
+                raw_desc = proj_dict.get("description")
+                raw_url = proj_dict.get("url") or proj_dict.get("link")
+                projects.append(
+                    Project(
+                        name=str(cast("object", raw_proj_title)).strip(),
+                        description=str(cast("object", raw_desc)).strip() if raw_desc else None,
+                        url=str(cast("object", raw_url)).strip() if raw_url else None,
                     )
-            elif isinstance(proj, str) and proj.strip():
-                projects.append(Project(name=proj.strip()))
+                )
+        elif isinstance(proj, str) and proj.strip():
+            projects.append(Project(name=proj.strip()))
 
     # 11. Languages
     languages: list[str] = []
-    for lang in clean_profile.get("languages") or []:
+    raw_langs = clean_profile.get("languages")
+    langs_list: list[object] = (
+        cast("list[object]", raw_langs) if isinstance(raw_langs, list) else []
+    )
+    for lang in langs_list:
         if isinstance(lang, dict):
-            lang_title = lang.get("title") or lang.get("name")
+            lang_dict: dict[str, Any] = cast("dict[str, Any]", lang)
+            lang_title = lang_dict.get("title") or lang_dict.get("name")
             if lang_title:
-                languages.append(str(lang_title).strip())
+                languages.append(str(cast("object", lang_title)).strip())
         elif isinstance(lang, str) and lang.strip():
             languages.append(lang.strip())
 
     # 12. Links
-    linkedin_url = clean_profile.get("input_url") or clean_profile.get("url") or url
+    raw_in_url = clean_profile.get("input_url") or clean_profile.get("url") or url
+    linkedin_url = str(cast("object", raw_in_url)).strip() if raw_in_url else None
     github_url: str | None = None
     portfolio_url: str | None = None
 
-    for bio_link in clean_profile.get("bio_links") or []:
-        if isinstance(bio_link, dict) and bio_link.get("link"):
-            link_str = bio_link["link"].strip()
-            if "github.com" in link_str.lower():
-                github_url = link_str
-            elif not portfolio_url:
-                portfolio_url = link_str
+    raw_bio_links = clean_profile.get("bio_links")
+    bio_links: list[object] = (
+        cast("list[object]", raw_bio_links) if isinstance(raw_bio_links, list) else []
+    )
+    for bio_link in bio_links:
+        if isinstance(bio_link, dict):
+            bl_dict: dict[str, Any] = cast("dict[str, Any]", bio_link)
+            link_val = bl_dict.get("link")
+            if link_val:
+                link_str = str(cast("object", link_val)).strip()
+                if "github.com" in link_str.lower():
+                    github_url = link_str
+                elif not portfolio_url:
+                    portfolio_url = link_str
 
     # 13. Narrative Context (Unmapped highlights: headline, recs, awards, pubs, volunteer, courses)
     narrative_sections: list[str] = []

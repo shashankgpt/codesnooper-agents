@@ -121,6 +121,7 @@ async def test_live_agent_structured_output_eval() -> None:
     """Live LLM extraction eval testing structured output extraction directly from sample text."""
     settings = get_settings()
     import os
+
     if os.environ.get("CI") or os.environ.get("OFFLINE") or not settings.google_api_key:
         pytest.skip("Skipping live LLM extraction eval in offline/sandbox test environment")
 

@@ -21,9 +21,7 @@ from app.models.resume import ResumeSchema
 logger = logging.getLogger(__name__)
 
 # Standard RFC-compliant email pattern
-EMAIL_REGEX = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-)
+EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 # Date range pattern to protect years like 2020-2024 from being identified as phones
 DATE_RANGE_REGEX = re.compile(
@@ -33,9 +31,9 @@ DATE_RANGE_REGEX = re.compile(
 
 # Phone number regex (international or standard national formats)
 PHONE_REGEX = re.compile(
-    r"(?:(?:\+|00)\d{1,3}[\s.-]?)?"      # Optional country prefix: +91, +1, etc.
-    r"(?:\(?\d{2,5}\)?[\s.-]?)?"          # Optional area code: (555), 022
-    r"\d{3,5}[\s.-]?\d{3,5}"              # Main number body
+    r"(?:(?:\+|00)\d{1,3}[\s.-]?)?"  # Optional country prefix: +91, +1, etc.
+    r"(?:\(?\d{2,5}\)?[\s.-]?)?"  # Optional area code: (555), 022
+    r"\d{3,5}[\s.-]?\d{3,5}"  # Main number body
 )
 
 # LinkedIn profile URL / handle regex

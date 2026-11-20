@@ -182,5 +182,3 @@ def test_openapi_resume_schema_has_latency_field(client: TestClient) -> None:
     schema = resp.json()
     response_schema = schema["components"]["schemas"]["ResumeParseResponse"]
     assert "latency_ms" in response_schema["properties"]
-
-

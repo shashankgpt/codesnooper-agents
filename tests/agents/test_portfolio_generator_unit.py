@@ -164,6 +164,7 @@ async def test_portfolio_controller_creates_draft_when_no_portfolio_exists() -> 
             new_callable=AsyncMock,
         ) as mock_agent_gen,
     ):
+
         def _get_profile_1(path: str) -> dict[str, Any]:
             return mock_profile if "profile/" in path else {}
 
@@ -247,6 +248,7 @@ async def test_portfolio_controller_stages_into_draft_data_if_published_exists()
             new_callable=AsyncMock,
         ) as mock_agent_gen,
     ):
+
         def _get_profile_1(path: str) -> dict[str, Any]:
             return mock_profile if "profile/" in path else {}
 
@@ -301,3 +303,190 @@ async def test_portfolio_controller_enhance_section() -> None:
         assert response.section == "bio"
         assert "Senior Systems Engineer" in response.enhanced_text
         assert len(response.bullets) == 2
+
+
+@pytest.mark.asyncio
+async def test_portfolio_controller_generate_anonymizes_full_payload_and_pops_raw_text() -> None:
+    """Verify raw_text/narrative_context are popped and full nested payload is masked."""
+    settings = Settings(langsmith_api_key="test-key", langsmith_tracing=True)
+    controller = PortfolioController(settings)
+
+    mock_profile: dict[str, Any] = {
+        "full_name": "Jordan Smith",
+        "email": "jordan.smith@example.com",
+        "phone": "+1 555-019-9234",
+        "raw_text": "Call Jordan Smith at +1 555-019-9234 or email jordan.smith@example.com",
+        "narrative_context": "Additional private notes",
+        "basicInfo": {
+            "name": "Jordan Smith",
+            "email": "jordan.smith@example.com",
+            "phone": "+1 555-019-9234",
+        },
+        "experience": [
+            {
+                "company": "Acme",
+                "description": "Contact Jordan Smith at jordan.smith@example.com",
+            }
+        ],
+    }
+
+    async def _mock_generate(
+        profile_data: dict[str, Any],
+        preferences_data: dict[str, Any] | None = None,
+        raw_text: str | None = None,
+        model: str = "gemini",
+    ) -> PortfolioGenerationOutput:
+        anon_name = str(profile_data.get("full_name") or "{{PII_NAME_1}}")
+        return PortfolioGenerationOutput(
+            name=anon_name,
+            headline="Staff Engineer · Distributed Systems",
+            bio=f"Systems monograph for {anon_name}.",
+            open_to_work=True,
+        )
+
+    mock_firestore = MagicMock()
+    mock_coll = MagicMock()
+    mock_coll.where.return_value = mock_coll
+    mock_coll.limit.return_value = mock_coll
+    mock_coll.get.return_value = []
+    mock_firestore.collection.return_value = mock_coll
+
+    with (
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_get",
+            new_callable=AsyncMock,
+        ) as mock_get,
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_set",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_merge",
+            new_callable=AsyncMock,
+        ),
+        patch.object(
+            type(firebase_service),
+            "firestore",
+            new_callable=PropertyMock,
+            return_value=mock_firestore,
+        ),
+        patch.object(
+            controller.agent,
+            "generate_portfolio",
+            new_callable=AsyncMock,
+            side_effect=_mock_generate,
+        ) as mock_agent_gen,
+        patch("app.controllers.portfolio_controller.flush_tracing") as mock_flush,
+    ):
+        mock_get.return_value = mock_profile
+
+        request = PortfolioGenerateJobRequest(uid="test-uid-full-anonymize")
+        result = await controller.generate_portfolio(request, "job-full-anon")
+
+        # 1. Verify agent call payload was scrubbed
+        mock_agent_gen.assert_called_once()
+        passed_kwargs = mock_agent_gen.call_args[1]
+        passed_profile = passed_kwargs["profile_data"]
+        passed_raw_text = passed_kwargs["raw_text"]
+
+        assert "raw_text" not in passed_profile
+        assert "narrative_context" not in passed_profile
+        assert "phone" not in passed_profile
+        assert "Jordan Smith" not in str(passed_profile)
+        assert "jordan.smith@example.com" not in str(passed_profile)
+        assert "{{PII_NAME_" in str(passed_profile)
+        assert "{{PII_EMAIL_" in str(passed_profile)
+
+        # Raw text argument must be anonymized
+        assert "+1 555-019-9234" not in str(passed_raw_text)
+        assert "jordan.smith@example.com" not in str(passed_raw_text)
+        assert "{{PII_PHONE_" in str(passed_raw_text)
+
+        # 2. Verify restored output has real values
+        assert result["portfolio"]["name"] == "Jordan Smith"
+        assert result["portfolio"]["bio"] == "Systems monograph for Jordan Smith."
+        mock_flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_controller_enhance_section_anonymizes_instruction_and_checks_residuals() -> (
+    None
+):
+    """Verify enhance_section anonymizes text & instructions and catches residuals."""
+    settings = Settings(langsmith_api_key="test-key", langsmith_tracing=True)
+    controller = PortfolioController(settings)
+
+    mock_profile = {"full_name": "Jordan Smith", "email": "jordan@example.com"}
+
+    mock_enhance_output = PortfolioEnhanceOutput(
+        enhanced_text="Bio for {{PII_NAME_1}} who reached 100k users.",
+        bullets=["Bullet 1 for {{PII_NAME_1}}"],
+    )
+
+    with (
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_get",
+            new_callable=AsyncMock,
+        ) as mock_get,
+        patch.object(
+            controller.agent,
+            "enhance_section",
+            new_callable=AsyncMock,
+        ) as mock_enhance,
+        patch("app.controllers.portfolio_controller.flush_tracing") as mock_flush,
+    ):
+        mock_get.return_value = mock_profile
+        mock_enhance.return_value = mock_enhance_output
+
+        request = PortfolioEnhanceRequest(
+            uid="user-123",
+            section="bio",
+            current_text="Jordan Smith is building systems.",
+            instruction="Emphasize Jordan Smith's leadership and contact jordan@example.com.",
+        )
+        response = await controller.enhance_section(request)
+
+        mock_enhance.assert_called_once()
+        passed_kwargs = mock_enhance.call_args[1]
+        assert "Jordan Smith" not in passed_kwargs["current_text"]
+        assert "Jordan Smith" not in passed_kwargs["instruction"]
+        assert "jordan@example.com" not in passed_kwargs["instruction"]
+        assert "{{PII_NAME_" in passed_kwargs["current_text"]
+        assert "{{PII_NAME_" in passed_kwargs["instruction"]
+
+        assert "Bio for Jordan Smith" in response.enhanced_text
+        assert "Bullet 1 for Jordan Smith" in response.bullets[0]
+        mock_flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_controller_enhance_section_raises_on_unrestored_residual() -> None:
+    """Verify enhance_section raises ValueError when unrestored PII placeholders remain."""
+    settings = Settings()
+    controller = PortfolioController(settings)
+
+    mock_enhance_output = PortfolioEnhanceOutput(
+        enhanced_text="Output with unrestored {{PII_UNKNOWN_99}} token.",
+        bullets=[],
+    )
+
+    with (
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_get",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            controller.agent,
+            "enhance_section",
+            new_callable=AsyncMock,
+            return_value=mock_enhance_output,
+        ),
+    ):
+        request = PortfolioEnhanceRequest(
+            uid="user-123",
+            section="bio",
+            current_text="Draft bio.",
+        )
+        with pytest.raises(ValueError, match="Restoration failed: residual placeholders remaining"):
+            await controller.enhance_section(request)

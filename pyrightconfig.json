@@ -6,10 +6,5 @@
   "venv": ".venv",
   "reportMissingTypeStubs": "none",
   "reportUnknownMemberType": "none",
-  "reportUnknownVariableType": "none",
-  "reportUnknownArgumentType": "none",
-  "reportUnknownLambdaType": "none",
-  "reportPrivateUsage": "none",
-  "reportUntypedFunctionDecorator": "none",
-  "reportAttributeAccessIssue": "none"
+  "reportUnknownVariableType": "none"
 }

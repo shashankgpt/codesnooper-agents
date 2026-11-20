@@ -10,6 +10,7 @@ from app.main import create_app
 @pytest.fixture(autouse=True)
 def _mock_health_external_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mock external network calls during health checks to keep tests offline and fast."""
+
     def _mock_true(*_args: object, **_kwargs: object) -> bool:
         return True
 

@@ -5,7 +5,7 @@ import logging
 import re
 import subprocess
 import tempfile
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, cast
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -318,15 +318,20 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
                 if resume_obj is None:
                     raw = result.get("raw")
                     if raw is not None:
-                        raw_tool_calls = getattr(raw, "tool_calls", None)
-                        raw_content = getattr(raw, "content", None)
+                        raw_obj = cast("object", raw)
+                        raw_tool_calls = getattr(raw_obj, "tool_calls", None)
+                        raw_content = getattr(raw_obj, "content", None)
                         if raw_tool_calls:
                             args = raw_tool_calls[0].get("args", {})
                             if isinstance(args, str):
                                 args = json.loads(args)
-                            resume_obj = ResumeExtractionSchema.model_validate(args).to_resume_schema()
+                            resume_obj = ResumeExtractionSchema.model_validate(
+                                args
+                            ).to_resume_schema()
                         elif raw_content:
-                            raw_text = raw_content if isinstance(raw_content, str) else str(raw_content)
+                            raw_text = (
+                                raw_content if isinstance(raw_content, str) else str(raw_content)
+                            )
                             match = re.search(r"\{.*\}", raw_text, re.DOTALL)
                             if match:
                                 resume_obj = ResumeExtractionSchema.model_validate_json(
