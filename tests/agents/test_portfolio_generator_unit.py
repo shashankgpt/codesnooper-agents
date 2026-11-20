@@ -1,10 +1,12 @@
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from google.api_core.datetime_helpers import DatetimeWithNanoseconds
 
 from app.config import Settings
-from app.controllers.portfolio_controller import PortfolioController
+from app.controllers.portfolio_controller import PortfolioController, sanitize_timestamps
 from app.core.pii_anonymizer import PIIVault
 from app.models.portfolio import (
     PortfolioEnhanceOutput,
@@ -17,6 +19,7 @@ from app.models.portfolio import (
     PortfolioSocials,
     slugify,
 )
+from app.prompts.portfolio_generator.v1 import build_portfolio_generator_prompts
 from app.repositories.firebase_client import firebase_service
 
 
@@ -490,3 +493,125 @@ async def test_portfolio_controller_enhance_section_raises_on_unrestored_residua
         )
         with pytest.raises(ValueError, match="Restoration failed: residual placeholders remaining"):
             await controller.enhance_section(request)
+
+
+def test_build_portfolio_generator_prompts_with_datetime_nanoseconds() -> None:
+    """Verify build_portfolio_generator_prompts serializes DatetimeWithNanoseconds objects cleanly."""
+    ts = DatetimeWithNanoseconds(2026, 11, 20, 12, 0, 0, nanosecond=123456000, tzinfo=UTC)
+    profile_data = {
+        "full_name": "Alex Rivera",
+        "createdAt": ts,
+        "updatedAt": ts,
+    }
+    preferences_data = {
+        "target_role": "Staff Engineer",
+        "updatedAt": ts,
+    }
+
+    # Should not raise TypeError: Object of type DatetimeWithNanoseconds is not JSON serializable
+    messages = build_portfolio_generator_prompts(
+        profile_data=profile_data,
+        preferences_data=preferences_data,
+        raw_text="Career summary text",
+    )
+    assert len(messages) == 2
+    human_msg = str(messages[1].content)
+    assert "Alex Rivera" in human_msg
+    assert "2026-11-20" in human_msg
+
+
+def test_sanitize_timestamps_recursively_converts_nanoseconds_and_datetime() -> None:
+    """Verify sanitize_timestamps converts nested DatetimeWithNanoseconds and datetimes to ISO strings."""
+    ts1 = DatetimeWithNanoseconds(2026, 11, 20, 10, 30, 0, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 11, 19, 8, 15, 0, tzinfo=UTC)
+
+    nested_input = {
+        "user": {
+            "createdAt": ts1,
+            "roles": [{"updatedAt": ts2, "name": "Lead"}],
+        },
+        "tags": ["python", "ai"],
+    }
+
+    sanitized = sanitize_timestamps(nested_input)
+    assert sanitized["user"]["createdAt"] == ts1.isoformat()
+    assert sanitized["user"]["roles"][0]["updatedAt"] == ts2.isoformat()
+    assert sanitized["tags"] == ["python", "ai"]
+
+
+@pytest.mark.asyncio
+async def test_portfolio_controller_generate_portfolio_handles_firestore_datetime_nanoseconds() -> (
+    None
+):
+    """Verify generate_portfolio safely handles Firestore DatetimeWithNanoseconds timestamps."""
+    settings = Settings()
+    controller = PortfolioController(settings)
+
+    ts = DatetimeWithNanoseconds(2026, 11, 20, 14, 0, 0, nanosecond=500000000, tzinfo=UTC)
+    raw_profile = {
+        "full_name": "Jordan Smith",
+        "headline": "Lead Platform Engineer",
+        "createdAt": ts,
+        "updatedAt": ts,
+        "basicInfo": {
+            "name": "Jordan Smith",
+            "phone": "+1 555-019-9234",
+            "lastActive": ts,
+        },
+    }
+    raw_prefs = {
+        "theme": "editorial",
+        "createdAt": ts,
+    }
+
+    mock_llm_output = PortfolioGenerationOutput(
+        name="Jordan Smith",
+        headline="Lead Platform Engineer · Distributed Systems",
+        bio="Monograph for Jordan Smith.\n\nDeep experience in systems.",
+        open_to_work=True,
+    )
+
+    with (
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_get",
+            new_callable=AsyncMock,
+        ) as mock_get,
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_merge",
+            new_callable=AsyncMock,
+        ) as mock_merge,
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_set",
+            new_callable=AsyncMock,
+        ) as mock_set,
+        patch.object(
+            type(firebase_service),
+            "firestore",
+            new_callable=PropertyMock,
+            return_value=None,
+        ),
+        patch.object(
+            controller.agent,
+            "generate_portfolio",
+            new_callable=AsyncMock,
+            return_value=mock_llm_output,
+        ) as mock_agent_gen,
+    ):
+
+        def _mock_get_side_effect(path: str) -> dict[str, Any] | None:
+            if "profile/" in path:
+                return raw_profile
+            if "userPreferences/" in path:
+                return raw_prefs
+            return None
+
+        mock_get.side_effect = _mock_get_side_effect
+
+        request = PortfolioGenerateJobRequest(uid="user-with-nanoseconds-ts")
+        result = await controller.generate_portfolio(request, job_id="job-nanoseconds-123")
+
+        assert result["success"] is True
+        assert result["portfolio"]["name"] == "Jordan Smith"
+        mock_agent_gen.assert_called_once()
+        mock_set.assert_called_once()
+        mock_merge.assert_called_once()

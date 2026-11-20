@@ -174,3 +174,95 @@ def test_portfolio_job_status_and_delete(auth_client: TestClient) -> None:
         del_resp = auth_client.delete("/api/v1/portfolio/jobs/job-123", headers=headers)
         assert del_resp.status_code == 204
         mock_del.assert_called_once_with("resume_parse_jobs/job-123")
+
+
+def test_portfolio_generate_accepts_profile_with_datetime_nanoseconds(
+    auth_client: TestClient,
+) -> None:
+    """Verify generate endpoint succeeds when Firestore profile contains DatetimeWithNanoseconds."""
+    from datetime import UTC
+
+    from google.api_core.datetime_helpers import DatetimeWithNanoseconds
+
+    headers = {
+        "Authorization": "Bearer test-secret-token-12345678901234567890",
+        "X-User-Id": "user-nano",
+    }
+    ts = DatetimeWithNanoseconds(2026, 11, 20, 10, 0, 0, nanosecond=123456000, tzinfo=UTC)
+    mock_profile = {
+        "full_name": "Nano Candidate",
+        "createdAt": ts,
+        "updatedAt": ts,
+    }
+
+    with (
+        patch(
+            "app.views.portfolio.firebase_service.async_get",
+            new_callable=AsyncMock,
+            return_value=mock_profile,
+        ),
+        patch(
+            "app.views.portfolio.firebase_service.async_create_or_get_resume_job",
+            new_callable=AsyncMock,
+            return_value=("job-nano-123", True),
+        ),
+        patch("app.views.portfolio.spawn_resume_parse", new_callable=AsyncMock) as mock_spawn,
+    ):
+        resp = auth_client.post(
+            "/api/v1/portfolio/generate",
+            headers=headers,
+            json={"uid": "user-nano"},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["job_id"] == "job-nano-123"
+        assert data["status"] == "queued"
+        mock_spawn.assert_called_once()
+
+
+def test_portfolio_enhance_with_datetime_nanoseconds_profile(auth_client: TestClient) -> None:
+    """Verify enhance endpoint succeeds when user profile contains DatetimeWithNanoseconds."""
+    from datetime import UTC
+
+    from google.api_core.datetime_helpers import DatetimeWithNanoseconds
+
+    headers = {
+        "Authorization": "Bearer test-secret-token-12345678901234567890",
+        "X-User-Id": "user-nano",
+    }
+    ts = DatetimeWithNanoseconds(2026, 11, 20, 10, 0, 0, nanosecond=123456000, tzinfo=UTC)
+    mock_profile = {
+        "full_name": "Nano Candidate",
+        "createdAt": ts,
+    }
+
+    mock_response = PortfolioEnhanceResponse(
+        success=True,
+        section="bio",
+        enhanced_text="Polished bio.",
+        bullets=[],
+    )
+
+    with (
+        patch(
+            "app.controllers.portfolio_controller.firebase_service.async_get",
+            new_callable=AsyncMock,
+            return_value=mock_profile,
+        ),
+        patch(
+            "app.controllers.portfolio_controller.PortfolioController.enhance_section",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+    ):
+        resp = auth_client.post(
+            "/api/v1/portfolio/enhance",
+            headers=headers,
+            json={
+                "uid": "user-nano",
+                "section": "bio",
+                "current_text": "Draft text",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True

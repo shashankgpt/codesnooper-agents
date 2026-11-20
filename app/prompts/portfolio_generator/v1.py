@@ -60,7 +60,7 @@ def build_portfolio_generator_prompts(
     if raw_text:
         user_context["raw_career_text"] = raw_text
 
-    formatted_context = json.dumps(user_context, indent=2, ensure_ascii=False)
+    formatted_context = json.dumps(user_context, indent=2, ensure_ascii=False, default=str)
     human_content = (
         "Please generate a complete, curated developer portfolio output "
         "grounded strictly in the following profile data:\n\n"

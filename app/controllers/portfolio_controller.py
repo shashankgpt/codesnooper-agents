@@ -3,7 +3,7 @@ import copy
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from langsmith import tracing_context
@@ -24,8 +24,23 @@ from app.repositories.firebase_client import firebase_service
 logger = logging.getLogger(__name__)
 
 
+def sanitize_timestamps(obj: Any) -> Any:
+    """Recursively convert datetime, date, or DatetimeWithNanoseconds objects to ISO strings."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if hasattr(obj, "isoformat") and callable(obj.isoformat):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: sanitize_timestamps(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_timestamps(v) for v in obj]
+    return obj
+
+
 class PortfolioController:
     """Orchestrates portfolio generation, section enhancements, and Firestore persistence."""
+
+    sanitize_timestamps = staticmethod(sanitize_timestamps)
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -46,11 +61,13 @@ class PortfolioController:
                 "Career profile not found for this user. "
                 "Please import or complete career profile first."
             )
-        profile_data: dict[str, Any] = cast("dict[str, Any]", raw_profile)
+        profile_data: dict[str, Any] = sanitize_timestamps(cast("dict[str, Any]", raw_profile))
 
         raw_prefs = await firebase_service.async_get(f"userPreferences/{request.uid}")
         preferences_data: dict[str, Any] = (
-            cast("dict[str, Any]", raw_prefs) if isinstance(raw_prefs, dict) else {}
+            sanitize_timestamps(cast("dict[str, Any]", raw_prefs))
+            if isinstance(raw_prefs, dict)
+            else {}
         )
 
         # 2. Hard Privacy Gate: strictly purge phone numbers from memory before LLM
@@ -79,7 +96,7 @@ class PortfolioController:
             vault.anonymize_text(raw_text, candidate_name=name_hint) if raw_text else None
         )
 
-        profile_json = json.dumps(safe_profile, ensure_ascii=False)
+        profile_json = json.dumps(safe_profile, ensure_ascii=False, default=str)
         anonymized_profile_json = vault.anonymize_text(profile_json, candidate_name=name_hint)
         anonymized_profile_data: dict[str, Any] = json.loads(anonymized_profile_json)
 
@@ -131,7 +148,8 @@ class PortfolioController:
                     return d.id, d.to_dict()
                 return None, None
 
-            existing_doc_id, existing_doc = await asyncio.to_thread(_find_user_portfolio)
+            existing_doc_id, raw_existing_doc = await asyncio.to_thread(_find_user_portfolio)
+            existing_doc = sanitize_timestamps(raw_existing_doc) if raw_existing_doc else None
 
         now_iso = datetime.now(UTC).isoformat()
         content_dict = restored_output.model_dump(by_alias=True, mode="json")
@@ -257,6 +275,7 @@ class PortfolioController:
             try:
                 raw_profile = await firebase_service.async_get(f"profile/{request.uid}")
                 if isinstance(raw_profile, dict):
+                    raw_profile = sanitize_timestamps(raw_profile)
                     basic_info = raw_profile.get("basicInfo")
                     basic_dict = basic_info if isinstance(basic_info, dict) else {}
                     name_val = (
