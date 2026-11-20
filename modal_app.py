@@ -52,6 +52,7 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
     from app.controllers.resume_controller import ResumeController
     from app.core.resume_jobs import (
         persist_profile_and_complete_job,
+        run_portfolio_generate_job,
         run_resume_combine_job,
         run_resume_sync_job,
     )
@@ -65,7 +66,9 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
         {"status": "processing", "updated_at": datetime.now(UTC).isoformat()},
     )
     try:
-        if agent_name == "resume_combine":
+        if agent_name == "portfolio_generate":
+            result = await run_portfolio_generate_job(task_id, payload)
+        elif agent_name == "resume_combine":
             result = await run_resume_combine_job(task_id, payload)
         elif agent_name == "resume_sync":
             result = await run_resume_sync_job(task_id, payload)

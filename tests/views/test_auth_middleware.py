@@ -1,8 +1,20 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _configure_legacy_token_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure legacy bearer token auth for testing token middleware in isolation."""
+    legacy_settings = Settings(
+        api_gateway_token="test-api-gateway-token",
+        m2m_signing_secret="",
+        m2m_signing_secrets="",
+    )
+    monkeypatch.setattr("app.core.middleware.get_settings", lambda: legacy_settings)
+    monkeypatch.setattr("tests.views.test_auth_middleware.get_settings", lambda: legacy_settings)
 
 
 def test_health_endpoints_exempt_without_token(client: TestClient) -> None:
@@ -109,9 +121,11 @@ def test_protected_endpoint_with_valid_token_in_x_gateway_token_passes(client: T
 
 def test_missing_server_token_returns_500(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify 500 status if API gateway token is unconfigured on server."""
-    from app.config import Settings
-
-    empty_settings = Settings(api_gateway_token="")
+    empty_settings = Settings(
+        api_gateway_token="",
+        m2m_signing_secret="",
+        m2m_signing_secrets="",
+    )
     monkeypatch.setattr("app.core.middleware.get_settings", lambda: empty_settings)
 
     app = create_app()
@@ -168,5 +182,3 @@ def test_openapi_resume_schema_has_latency_field(client: TestClient) -> None:
     schema = resp.json()
     response_schema = schema["components"]["schemas"]["ResumeParseResponse"]
     assert "latency_ms" in response_schema["properties"]
-
-

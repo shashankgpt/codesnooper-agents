@@ -120,8 +120,10 @@ def test_schema_completeness_eval_detects_missing_fields() -> None:
 async def test_live_agent_structured_output_eval() -> None:
     """Live LLM extraction eval testing structured output extraction directly from sample text."""
     settings = get_settings()
-    if not settings.google_api_key:
-        pytest.skip("GOOGLE_API_KEY not configured; skipping live LLM extraction eval")
+    import os
+
+    if os.environ.get("CI") or os.environ.get("OFFLINE") or not settings.google_api_key:
+        pytest.skip("Skipping live LLM extraction eval in offline/sandbox test environment")
 
     from langchain_core.messages import HumanMessage, SystemMessage
 

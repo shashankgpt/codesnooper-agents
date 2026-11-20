@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langsmith import tracing_context
@@ -56,6 +56,14 @@ class ResumeController:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._graph = build_resume_parser_graph()
+
+    @property
+    def graph(self) -> Any:
+        return self._graph
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
 
     async def combine_profiles(self, request: ResumeCombineRequest) -> ResumeCombineResponse:
         """Use structured AI output to combine two profiles without changing the schema."""
@@ -265,11 +273,12 @@ class ResumeController:
                     "   - If UPDATES_JSON comes from Resume Builder (e.g. personalInfo, experience "
                     "with role/techStack, education, skills as category-items, customSections, "
                     "hobbies), map them accurately into standard schema fields.\n"
-                    "   - If UPDATES_JSON comes from Portfolio (e.g. name, subHeading, basicInfo, "
-                    "achievements, timelineEvents, skills with skillName), map them accurately "
-                    "into standard schema fields.\n"
+                    "   - If UPDATES_JSON comes from Portfolio (either legacy v1 e.g. name, subHeading, basicInfo, "
+                    "achievements, timelineEvents, skills with skillName, OR modern v2 e.g. headline, "
+                    "bio, highlights, projects, experience with bullets/technologies, skillGroups with "
+                    "category/skills, education, certifications), map them accurately into standard schema fields.\n"
                     "   - Fold rich unmapped content (customSections, hobbies, subHeading, "
-                    "achievements) into narrative_context as structured markdown.\n"
+                    "highlights, achievements) into narrative_context as structured markdown.\n"
                     "3. Merge skills and languages into a unified, deduplicated list.\n"
                     "4. Preserve PII placeholders exactly. The response must match "
                     "ResumeExtractionSchema."

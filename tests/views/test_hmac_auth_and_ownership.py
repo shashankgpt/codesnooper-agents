@@ -12,14 +12,14 @@ Covers:
 import hashlib
 import hmac
 import time
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Generator
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.main import create_app
-
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ LEGACY_TOKEN = "legacy-bearer-token-for-tests"
 
 
 @pytest.fixture()
-def hmac_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def hmac_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """App configured for HMAC-only auth (M2M_SIGNING_SECRET set)."""
     settings = Settings(m2m_signing_secret=SIGNING_SECRET)
     monkeypatch.setattr("app.core.middleware.get_settings", lambda: settings)
@@ -64,9 +64,13 @@ def hmac_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 @pytest.fixture()
-def legacy_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def legacy_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """App configured for legacy bearer token only."""
-    settings = Settings(api_gateway_token=LEGACY_TOKEN)
+    settings = Settings(
+        api_gateway_token=LEGACY_TOKEN,
+        m2m_signing_secret="",
+        m2m_signing_secrets="",
+    )
     monkeypatch.setattr("app.core.middleware.get_settings", lambda: settings)
     app = create_app()
     with TestClient(app) as client:
@@ -74,7 +78,7 @@ def legacy_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 @pytest.fixture()
-def rotation_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def rotation_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """App with both old and new HMAC secrets (zero-downtime rotation)."""
     old_secret = "old-hmac-signing-secret-at-least-32-chars"
     new_secret = SIGNING_SECRET
@@ -92,7 +96,7 @@ class TestHmacAuth:
     """HMAC-SHA256 request signing validation."""
 
     PATH = "/api/v1/resume/parse"
-    BODY = b'{"uid":"uid-alice","url":"https://example.com/resume.pdf","model":"auto"}'
+    BODY = b'{"invalid": "schema"}'
 
     def test_valid_hmac_signature_passes_middleware(self, hmac_client: TestClient) -> None:
         """A correctly signed request reaches the route (422 = schema validation, not 401)."""
@@ -198,7 +202,7 @@ class TestMultiSecretRotation:
     """Both old and new HMAC secrets must be accepted during zero-downtime rotation."""
 
     PATH = "/api/v1/resume/parse"
-    BODY = b'{"uid":"uid-alice","url":"https://example.com/cv.pdf","model":"auto"}'
+    BODY = b'{"invalid": "schema"}'
 
     def test_old_secret_still_accepted_during_rotation(self, rotation_client: TestClient) -> None:
         old_secret = "old-hmac-signing-secret-at-least-32-chars"
@@ -212,7 +216,9 @@ class TestMultiSecretRotation:
         assert resp.status_code != 401
 
     def test_unknown_secret_rejected_during_rotation(self, rotation_client: TestClient) -> None:
-        headers = _hmac_headers("completely-wrong-secret-at-least-32-chars!!", "POST", self.PATH, self.BODY)
+        headers = _hmac_headers(
+            "completely-wrong-secret-at-least-32-chars!!", "POST", self.PATH, self.BODY
+        )
         resp = rotation_client.post(self.PATH, content=self.BODY, headers=headers)
         assert resp.status_code == 401
 
@@ -236,7 +242,7 @@ class TestUidOwnership:
         return _hmac_headers(SIGNING_SECRET, "DELETE", self.DELETE_PATH, user_id=user_id)
 
     @pytest.fixture()
-    def hmac_app(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    def hmac_app(self, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
         settings = Settings(m2m_signing_secret=SIGNING_SECRET)
         monkeypatch.setattr("app.core.middleware.get_settings", lambda: settings)
         app = create_app()
@@ -349,4 +355,3 @@ class TestDocsDisabledInProduction:
         with TestClient(app) as client:
             assert client.get("/docs").status_code == 200
             assert client.get("/openapi.json").status_code == 200
-

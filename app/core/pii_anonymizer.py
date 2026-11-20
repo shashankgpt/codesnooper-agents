@@ -15,28 +15,25 @@ PII scrubbed:
 import json
 import logging
 import re
-from typing import Any
 
 from app.models.resume import ResumeSchema
 
 logger = logging.getLogger(__name__)
 
 # Standard RFC-compliant email pattern
-EMAIL_REGEX = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-)
+EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 # Date range pattern to protect years like 2020-2024 from being identified as phones
 DATE_RANGE_REGEX = re.compile(
-    r"\b(?:19|20)\d{2}\s*[-–—/]\s*(?:(?:19|20)\d{2}|present|current)\b",
+    r"\b(?:19|20)\d{2}\s*[-\u2013\u2014/]\s*(?:(?:19|20)\d{2}|present|current)\b",
     re.IGNORECASE,
 )
 
 # Phone number regex (international or standard national formats)
 PHONE_REGEX = re.compile(
-    r"(?:(?:\+|00)\d{1,3}[\s.-]?)?"      # Optional country prefix: +91, +1, etc.
-    r"(?:\(?\d{2,5}\)?[\s.-]?)?"          # Optional area code: (555), 022
-    r"\d{3,5}[\s.-]?\d{3,5}"              # Main number body
+    r"(?:(?:\+|00)\d{1,3}[\s.-]?)?"  # Optional country prefix: +91, +1, etc.
+    r"(?:\(?\d{2,5}\)?[\s.-]?)?"  # Optional area code: (555), 022
+    r"\d{3,5}[\s.-]?\d{3,5}"  # Main number body
 )
 
 # LinkedIn profile URL / handle regex
@@ -151,12 +148,10 @@ class PIIVault:
         )
         return masked
 
-    def restore_resume(self, resume: ResumeSchema) -> ResumeSchema:
-        """Restore all original PII values back into the structured ResumeSchema object."""
+    def restore_raw_json(self, raw_json: str) -> str:
+        """De-anonymize a raw JSON string by replacing all PII placeholders."""
         if not self.vault_map:
-            return resume
-
-        raw_json = resume.model_dump_json()
+            return raw_json
 
         # Sort placeholders by length descending to avoid partial overlap replacements
         sorted_items = sorted(
@@ -165,31 +160,32 @@ class PIIVault:
             reverse=True,
         )
 
+        restored_json = raw_json
         for placeholder, original_value in sorted_items:
             tag = placeholder.strip("{}")
             escaped_val = json.dumps(original_value)[1:-1]
 
             # 1. Full double braces {{TAG}} (with optional whitespace or appended dummy domain)
-            raw_json = re.sub(
+            restored_json = re.sub(
                 rf"\{{\{{\s*{re.escape(tag)}\s*\}}\}}(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
-                lambda _: escaped_val,
-                raw_json,
+                lambda _, v=escaped_val: v,
+                restored_json,
                 flags=re.IGNORECASE,
             )
 
             # 2. Single braces {TAG}
-            raw_json = re.sub(
+            restored_json = re.sub(
                 rf"\{{\s*{re.escape(tag)}\s*\}}(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
-                lambda _: escaped_val,
-                raw_json,
+                lambda _, v=escaped_val: v,
+                restored_json,
                 flags=re.IGNORECASE,
             )
 
             # 3. Naked tag \bTAG\b with optional leading + and optional trailing dummy domain
-            raw_json = re.sub(
+            restored_json = re.sub(
                 rf"\+?\b{re.escape(tag)}\b(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
-                lambda _: escaped_val,
-                raw_json,
+                lambda _, v=escaped_val: v,
+                restored_json,
                 flags=re.IGNORECASE,
             )
 
@@ -198,17 +194,69 @@ class PIIVault:
             r"\{\{PII_[A-Za-z0-9_]+\}\}|(?:\b|\b\+)PII_(?:EMAIL|PHONE|NAME|NAMEPART|HANDLE)_[A-Za-z0-9_]+\b",
             re.IGNORECASE,
         )
-        residuals = residual_pattern.findall(raw_json)
+        residuals = residual_pattern.findall(restored_json)
         if residuals:
             unique_residuals = sorted(set(residuals))
+            res_str = ", ".join(unique_residuals)
             raise ValueError(
-                f"PII de-anonymization failed: residual placeholders ({', '.join(unique_residuals)}) "
+                f"PII de-anonymization failed: residual placeholders ({res_str}) "
                 "could not be restored to original data."
             )
 
-        restored = ResumeSchema.model_validate_json(raw_json)
+        return restored_json
+
+    def restore_text(self, text: str) -> str:
+        """De-anonymize plain text by replacing all registered placeholders with original values."""
+        if not self.vault_map or not text:
+            return text
+
+        sorted_items = sorted(
+            self.vault_map.items(),
+            key=lambda item: len(item[0].strip("{}")),
+            reverse=True,
+        )
+        restored = text
+        for placeholder, original_value in sorted_items:
+            tag = placeholder.strip("{}")
+            restored = re.sub(
+                rf"\{{\{{\s*{re.escape(tag)}\s*\}}\}}(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
+                lambda _, val=original_value: val,
+                restored,
+                flags=re.IGNORECASE,
+            )
+            restored = re.sub(
+                rf"\{{\s*{re.escape(tag)}\s*\}}(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
+                lambda _, val=original_value: val,
+                restored,
+                flags=re.IGNORECASE,
+            )
+            restored = re.sub(
+                rf"\+?\b{re.escape(tag)}\b(?:@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})?",
+                lambda _, val=original_value: val,
+                restored,
+                flags=re.IGNORECASE,
+            )
+        return restored
+
+    def restore_resume(self, resume: ResumeSchema) -> ResumeSchema:
+        """Restore all original PII values back into the structured ResumeSchema object."""
+        if not self.vault_map:
+            return resume
+
+        restored_json = self.restore_raw_json(resume.model_dump_json())
+        restored = ResumeSchema.model_validate_json(restored_json)
         logger.info("Restored PII values for %d placeholders in parsed resume", len(self.vault_map))
         return restored
+
+    @staticmethod
+    def find_residuals_in_text(text: str) -> list[str]:
+        """Check raw text for any unrestored PII placeholders."""
+        matches = re.findall(
+            r"\{\{PII_[A-Za-z0-9_]+\}\}|(?:\b|\b\+)PII_(?:EMAIL|PHONE|NAME|NAMEPART|HANDLE)_[A-Za-z0-9_]+\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return sorted(set(matches))
 
     @staticmethod
     def find_residuals(resume: ResumeSchema) -> list[str]:

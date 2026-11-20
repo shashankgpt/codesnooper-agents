@@ -32,8 +32,8 @@ def test_classify_url() -> None:
 
 
 def test_linkedin_formatter_strips_extraneous_sections() -> None:
-    """Verify _format_profile_as_text strips activity, people_also_viewed, and social bloat."""
-    from app.agents.linkedin_scraper import _format_profile_as_text
+    """Verify format_profile_as_text strips activity, people_also_viewed, and social bloat."""
+    from app.agents.linkedin_scraper import format_profile_as_text
 
     mock_profile = {
         "name": "Jane Doe",
@@ -53,7 +53,7 @@ def test_linkedin_formatter_strips_extraneous_sections() -> None:
         "posts": [{"title": "My Post"}],
     }
 
-    result = _format_profile_as_text(mock_profile)
+    result = format_profile_as_text(mock_profile)
 
     assert "Jane Doe" in result
     assert "Staff Engineer" in result
@@ -468,7 +468,7 @@ async def test_resume_controller_routes_linkedin_to_ai_with_pii_vault() -> None:
             new_callable=AsyncMock,
         ) as mock_fetch,
         patch.object(
-            controller._graph,
+            controller.graph,
             "ainvoke",
             new_callable=AsyncMock,
         ) as mock_invoke,
@@ -540,7 +540,7 @@ async def test_resume_controller_refetches_blob_when_blob_content_is_none() -> N
             new_callable=AsyncMock,
         ) as mock_fetch_text,
         patch.object(
-            controller._graph,
+            controller.graph,
             "ainvoke",
             new_callable=AsyncMock,
         ) as mock_invoke,
@@ -559,7 +559,7 @@ async def test_resume_controller_refetches_blob_when_blob_content_is_none() -> N
         mock_fetch_blob.assert_awaited_once_with(
             "career-profiles/test_user_blob/sample_resume.pdf",
             "test_user_blob",
-            controller._settings,
+            controller.settings,
         )
         assert response.resume is not None
         assert response.resume.full_name == "Bob Worker"
@@ -597,7 +597,7 @@ async def test_resume_controller_handles_base64_blob_content() -> None:
             new_callable=AsyncMock,
         ) as mock_fetch_text,
         patch.object(
-            controller._graph,
+            controller.graph,
             "ainvoke",
             new_callable=AsyncMock,
         ) as mock_invoke,

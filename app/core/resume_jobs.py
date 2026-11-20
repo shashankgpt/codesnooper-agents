@@ -225,6 +225,17 @@ async def run_resume_sync_job(job_id: str, payload: dict[str, Any]) -> dict[str,
     return result
 
 
+async def run_portfolio_generate_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Curate developer portfolio draft from user profile & preferences and persist."""
+    from app.config import get_settings
+    from app.controllers.portfolio_controller import PortfolioController
+    from app.models.portfolio import PortfolioGenerateJobRequest
+
+    request = PortfolioGenerateJobRequest.model_validate(payload)
+    controller = PortfolioController(get_settings())
+    return await controller.generate_portfolio(request, job_id)
+
+
 async def _run_local_resume_parse(
     job_id: str,
     payload: dict[str, Any],
@@ -240,6 +251,9 @@ async def _run_local_resume_parse(
     now = datetime.now(UTC).isoformat()
     try:
         await firebase_service.async_merge(path, {"status": "processing", "updated_at": now})
+        if agent_name == "portfolio_generate":
+            await run_portfolio_generate_job(job_id, payload)
+            return
         if agent_name == "resume_combine":
             await run_resume_combine_job(job_id, payload)
             return

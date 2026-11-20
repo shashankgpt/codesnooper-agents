@@ -1,5 +1,5 @@
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -60,16 +60,17 @@ class Experience(BaseModel):
             return [v]
         if isinstance(v, list):
             cleaned: list[str] = []
-            for item in v:
+            raw_list: list[object] = cast("list[object]", v)
+            for item in raw_list:
                 if isinstance(item, str):
                     cleaned.append(item)
                 elif isinstance(item, dict):
-                    # Join key-values: e.g. {"project": "SA Dashboard"} -> "project: SA Dashboard"
-                    cleaned.append(", ".join(f"{k}: {val}" for k, val in item.items() if val))
+                    dict_item: dict[object, object] = cast("dict[object, object]", item)
+                    cleaned.append(", ".join(f"{k}: {val}" for k, val in dict_item.items() if val))
                 elif item is not None:
                     cleaned.append(str(item))
             return cleaned
-        return [str(v)]
+        return [str(cast("object", v))]
 
 
 class Education(BaseModel):
@@ -170,10 +171,10 @@ def generate_resume_raw_text(
     if experience:
         exp_lines = ["## Work Experience"]
         for exp in experience:
-            exp_dict = (
+            exp_dict: dict[str, Any] = (
                 exp.model_dump()
                 if hasattr(exp, "model_dump")
-                else (exp if isinstance(exp, dict) else {})
+                else (cast("dict[str, Any]", exp) if isinstance(exp, dict) else {})
             )
             title = (exp_dict.get("title") or "Position").strip()
             company = (exp_dict.get("company") or "Company").strip()
@@ -192,15 +193,18 @@ def generate_resume_raw_text(
             loc_str = f" | {exp_loc}" if exp_loc else ""
             exp_lines.append(f"\n### {title} at {company}{date_str}{loc_str}")
 
-            desc = (exp_dict.get("description") or "").strip()
+            desc_val = exp_dict.get("description")
+            desc = str(cast("object", desc_val)).strip() if desc_val else ""
             if desc:
                 exp_lines.append(desc)
 
             highlights = exp_dict.get("highlights") or []
             if isinstance(highlights, list):
-                for h in highlights:
-                    if h and str(h).strip():
-                        exp_lines.append(f"- {str(h).strip()}")
+                raw_highlights: list[object] = cast("list[object]", highlights)
+                for h in raw_highlights:
+                    h_str = str(h).strip() if h is not None else ""
+                    if h_str:
+                        exp_lines.append(f"- {h_str}")
         if len(exp_lines) > 1:
             sections.append("\n".join(exp_lines))
 
@@ -208,10 +212,10 @@ def generate_resume_raw_text(
     if education:
         edu_lines = ["## Education"]
         for edu in education:
-            edu_dict = (
+            edu_dict: dict[str, Any] = (
                 edu.model_dump()
                 if hasattr(edu, "model_dump")
-                else (edu if isinstance(edu, dict) else {})
+                else (cast("dict[str, Any]", edu) if isinstance(edu, dict) else {})
             )
             degree = (edu_dict.get("degree") or "").strip()
             field = (edu_dict.get("field_of_study") or edu_dict.get("field") or "").strip()
@@ -242,7 +246,8 @@ def generate_resume_raw_text(
             if grade:
                 edu_lines.append(f"Grade/Honors: {grade}")
 
-            desc = (edu_dict.get("description") or "").strip()
+            desc_val = edu_dict.get("description")
+            desc = str(cast("object", desc_val)).strip() if desc_val else ""
             if desc:
                 edu_lines.append(desc)
         if len(edu_lines) > 1:
@@ -252,23 +257,25 @@ def generate_resume_raw_text(
     if projects:
         proj_lines = ["## Projects"]
         for proj in projects:
-            proj_dict = (
+            proj_dict: dict[str, Any] = (
                 proj.model_dump()
                 if hasattr(proj, "model_dump")
-                else (proj if isinstance(proj, dict) else {})
+                else (cast("dict[str, Any]", proj) if isinstance(proj, dict) else {})
             )
             name = (proj_dict.get("name") or "Project").strip()
             url = (proj_dict.get("url") or "").strip()
             url_str = f" ({url})" if url else ""
             proj_lines.append(f"\n### {name}{url_str}")
 
-            desc = (proj_dict.get("description") or "").strip()
+            desc_val = proj_dict.get("description")
+            desc = str(cast("object", desc_val)).strip() if desc_val else ""
             if desc:
                 proj_lines.append(desc)
 
             techs = proj_dict.get("technologies") or []
-            if techs:
-                cleaned_techs = [str(t).strip() for t in techs if t and str(t).strip()]
+            if isinstance(techs, list):
+                raw_techs: list[object] = cast("list[object]", techs)
+                cleaned_techs = [str(t).strip() for t in raw_techs if t and str(t).strip()]
                 if cleaned_techs:
                     proj_lines.append(f"Technologies: {', '.join(cleaned_techs)}")
         if len(proj_lines) > 1:
@@ -278,19 +285,21 @@ def generate_resume_raw_text(
     if certificates:
         cert_lines = ["## Certifications"]
         for cert in certificates:
-            cert_dict = (
+            cert_dict: dict[str, Any] = (
                 cert.model_dump()
                 if hasattr(cert, "model_dump")
-                else (cert if isinstance(cert, dict) else {})
+                else (cast("dict[str, Any]", cert) if isinstance(cert, dict) else {})
             )
-            name = (cert_dict.get("name") or "Certification").strip()
-            issuer = (
-                cert_dict.get("issuing_organization") or cert_dict.get("issuer") or ""
-            ).strip()
-            date = (cert_dict.get("issue_date") or "").strip()
-            url = (cert_dict.get("credential_url") or "").strip()
+            raw_name = cert_dict.get("name")
+            name = str(cast("object", raw_name)).strip() if raw_name else "Certification"
+            raw_issuer = cert_dict.get("issuing_organization") or cert_dict.get("issuer")
+            issuer = str(cast("object", raw_issuer)).strip() if raw_issuer else ""
+            raw_date = cert_dict.get("issue_date")
+            date = str(cast("object", raw_date)).strip() if raw_date else ""
+            raw_url = cert_dict.get("credential_url")
+            url = str(cast("object", raw_url)).strip() if raw_url else ""
 
-            parts = [name]
+            parts: list[str] = [name]
             if issuer:
                 parts.append(f"Issued by {issuer}")
             if date:
