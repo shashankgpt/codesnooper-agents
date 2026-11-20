@@ -168,7 +168,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
         raw_body = await request.body()
         signed_payload = (
-            f"{timestamp}.{request.method.upper()}.{request.url.path}.".encode("utf-8")
+            f"{timestamp}.{request.method.upper()}.{request.url.path}.".encode()
             + raw_body
         )
         is_valid = any(

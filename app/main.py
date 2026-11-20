@@ -17,6 +17,7 @@ from app.core.middleware import TimingMiddleware, TokenAuthMiddleware
 from app.core.sentry import init_sentry
 from app.repositories.firebase_client import firebase_service
 from app.views.health import router as health_router
+from app.views.portfolio import router as portfolio_router
 from app.views.resume import router as resume_router
 
 
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(resume_router, prefix="/api/v1")
+    app.include_router(portfolio_router, prefix="/api/v1")
 
     def custom_openapi() -> dict[str, Any]:
         """Inject OpenAPI security schemes for Swagger UI Authorize support."""

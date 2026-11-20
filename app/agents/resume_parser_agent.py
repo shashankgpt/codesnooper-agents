@@ -70,9 +70,10 @@ def classify_url(url: str) -> Literal["pdf", "doc", "docx", "linkedin", "html"]:
     path = parsed.path.lower()
 
     # Google Drive document / file preview links
-    if "drive.google.com" in domain or "docs.google.com" in domain:
-        if "/file/d/" in path or "id=" in parsed.query:
-            return "pdf"
+    if ("drive.google.com" in domain or "docs.google.com" in domain) and (
+        "/file/d/" in path or "id=" in parsed.query
+    ):
+        return "pdf"
 
     if path.endswith(".docx"):
         return "docx"
@@ -316,18 +317,21 @@ async def parse_resume_node(state: ResumeParserState) -> ResumeParserState:
                 # 2. Fallback: inspect raw message for tool_calls or JSON content if parsed was None
                 if resume_obj is None:
                     raw = result.get("raw")
-                    if hasattr(raw, "tool_calls") and raw.tool_calls:
-                        args = raw.tool_calls[0].get("args", {})
-                        if isinstance(args, str):
-                            args = json.loads(args)
-                        resume_obj = ResumeExtractionSchema.model_validate(args).to_resume_schema()
-                    elif hasattr(raw, "content") and raw.content:
-                        raw_text = raw.content if isinstance(raw.content, str) else str(raw.content)
-                        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                        if match:
-                            resume_obj = ResumeExtractionSchema.model_validate_json(
-                                match.group(0)
-                            ).to_resume_schema()
+                    if raw is not None:
+                        raw_tool_calls = getattr(raw, "tool_calls", None)
+                        raw_content = getattr(raw, "content", None)
+                        if raw_tool_calls:
+                            args = raw_tool_calls[0].get("args", {})
+                            if isinstance(args, str):
+                                args = json.loads(args)
+                            resume_obj = ResumeExtractionSchema.model_validate(args).to_resume_schema()
+                        elif raw_content:
+                            raw_text = raw_content if isinstance(raw_content, str) else str(raw_content)
+                            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+                            if match:
+                                resume_obj = ResumeExtractionSchema.model_validate_json(
+                                    match.group(0)
+                                ).to_resume_schema()
 
             if resume_obj is None:
                 raise ValueError("LLM returned empty or unparseable structured output")

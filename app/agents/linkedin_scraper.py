@@ -109,7 +109,7 @@ def _format_profile_as_text(profile: dict[str, Any]) -> str:
                     )
                     degree = edu.get("degree") or edu.get("degree_name") or ""
                     field = edu.get("field") or edu.get("field_of_study") or edu.get("major") or ""
-                    degree_part = f"{degree} in {field}".strip(" in ") if (degree or field) else ""
+                    degree_part = f"{degree} in {field}" if (degree and field) else (degree or field)
 
                     # Compute period from period, dates, or start_year/end_year
                     period = edu.get("period") or edu.get("dates") or ""
