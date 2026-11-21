@@ -14,6 +14,7 @@ from app.models.resume import (
     ResumeSchema,
     ResumeSyncJobRequest,
 )
+from app.models.resume_generator import ResumeGenerateJobRequest
 from app.repositories.firebase_client import firebase_service
 
 router = APIRouter(tags=["resume"])
@@ -157,6 +158,50 @@ async def sync_career_profile(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not start profile synchronization",
+        ) from exc
+    return ResumeParseJobResponse(job_id=job_id, status="queued")
+
+
+@router.post(
+    "/resume/generate",
+    response_model=ResumeParseJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start an asynchronous resume generation job",
+    description="Queue ATS resume curation from career profile and preferences. Poll GET /api/v1/resume/jobs/{job_id}.",
+)
+async def generate_resume(
+    request: ResumeGenerateJobRequest,
+    raw_request: Request,
+) -> ResumeParseJobResponse:
+    """Validate user and queue background ATS resume generation."""
+    if _request_uid(raw_request) != request.uid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="User ID does not match request"
+        )
+    payload = request.model_dump(mode="json")
+    job_id, created = await _create_or_reuse_job(
+        raw_request,
+        {
+            "uid": request.uid,
+            "status": "queued",
+            "result": None,
+            "job_type": "resume_generate",
+            "updated_at": datetime.now(UTC).isoformat(),
+            "idempotency_key": raw_request.headers.get("idempotency-key"),
+        },
+    )
+    if not created:
+        return ResumeParseJobResponse(job_id=job_id, status="queued")
+    try:
+        await spawn_resume_parse(job_id, payload, agent_name="resume_generate")
+    except Exception as exc:
+        logger.exception("Could not dispatch resume generation job %s", job_id)
+        await firebase_service.async_merge(
+            f"resume_parse_jobs/{job_id}", {"status": "failed", "result": {"error": str(exc)}}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not start resume generation",
         ) from exc
     return ResumeParseJobResponse(job_id=job_id, status="queued")
 

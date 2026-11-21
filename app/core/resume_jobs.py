@@ -8,6 +8,14 @@ from typing import Any
 logger = logging.getLogger(__name__)
 _modal_job_function: Any = None
 _local_tasks: set[asyncio.Task[None]] = set()
+_user_sync_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_user_sync_lock(uid: str) -> asyncio.Lock:
+    """Retrieve or initialize an asyncio.Lock for per-user sequential sync job execution."""
+    if uid not in _user_sync_locks:
+        _user_sync_locks[uid] = asyncio.Lock()
+    return _user_sync_locks[uid]
 
 
 def configure_modal_job_function(function: Any) -> None:
@@ -193,36 +201,43 @@ async def persist_synced_profile_and_complete_job(
 
 
 async def run_resume_sync_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Execute authoritative or additive profile synchronization and persist the result."""
+    """Execute authoritative or additive profile synchronization and persist the result sequentially."""
     from app.config import get_settings
     from app.controllers.resume_controller import ResumeController
     from app.models.resume import ResumeSchema, ResumeSyncJobRequest, ResumeSyncRequest
     from app.repositories.firebase_client import firebase_service
 
     request = ResumeSyncJobRequest.model_validate(payload)
-    current_data = await firebase_service.async_get(f"profile/{request.uid}")
-    current_profile = ResumeSchema.model_validate(current_data) if current_data else None
+    lock = get_user_sync_lock(request.uid)
 
-    controller = ResumeController(get_settings())
-    sync_resp = await controller.sync_profile(
-        ResumeSyncRequest(
-            current_profile=current_profile,
-            profile_updates=request.profile_updates,
-            mode=request.mode,
-            source_kind=request.source_kind,
-            model=request.model,
+    async with lock:
+        path = f"resume_parse_jobs/{job_id}"
+        now = datetime.now(UTC).isoformat()
+        await firebase_service.async_merge(path, {"status": "processing", "updated_at": now})
+
+        current_data = await firebase_service.async_get(f"profile/{request.uid}")
+        current_profile = ResumeSchema.model_validate(current_data) if current_data else None
+
+        controller = ResumeController(get_settings())
+        sync_resp = await controller.sync_profile(
+            ResumeSyncRequest(
+                current_profile=current_profile,
+                profile_updates=request.profile_updates,
+                mode=request.mode,
+                source_kind=request.source_kind,
+                model=request.model,
+            )
         )
-    )
-    result = {
-        "success": True,
-        "resume": sync_resp.profile.model_dump(mode="json"),
-        "raw_text": sync_resp.profile.raw_text,
-        "model_used": sync_resp.model_used,
-        "mode": request.mode,
-        "source_kind": request.source_kind,
-    }
-    await persist_synced_profile_and_complete_job(job_id, request.uid, request.mode, result)
-    return result
+        result = {
+            "success": True,
+            "resume": sync_resp.profile.model_dump(mode="json"),
+            "raw_text": sync_resp.profile.raw_text,
+            "model_used": sync_resp.model_used,
+            "mode": request.mode,
+            "source_kind": request.source_kind,
+        }
+        await persist_synced_profile_and_complete_job(job_id, request.uid, request.mode, result)
+        return result
 
 
 async def run_portfolio_generate_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -234,6 +249,17 @@ async def run_portfolio_generate_job(job_id: str, payload: dict[str, Any]) -> di
     request = PortfolioGenerateJobRequest.model_validate(payload)
     controller = PortfolioController(get_settings())
     return await controller.generate_portfolio(request, job_id)
+
+
+async def run_resume_generate_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Curate ATS resume draft from user profile & preferences and persist."""
+    from app.config import get_settings
+    from app.controllers.resume_generator_controller import ResumeGeneratorController
+    from app.models.resume_generator import ResumeGenerateJobRequest
+
+    request = ResumeGenerateJobRequest.model_validate(payload)
+    controller = ResumeGeneratorController(get_settings())
+    return await controller.generate_resume(request, job_id)
 
 
 async def _run_local_resume_parse(
@@ -250,15 +276,19 @@ async def _run_local_resume_parse(
     path = f"resume_parse_jobs/{job_id}"
     now = datetime.now(UTC).isoformat()
     try:
+        if agent_name == "resume_sync":
+            # For resume_sync, keep status as 'queued' until lock is acquired in run_resume_sync_job
+            await run_resume_sync_job(job_id, payload)
+            return
         await firebase_service.async_merge(path, {"status": "processing", "updated_at": now})
         if agent_name == "portfolio_generate":
             await run_portfolio_generate_job(job_id, payload)
             return
+        if agent_name == "resume_generate":
+            await run_resume_generate_job(job_id, payload)
+            return
         if agent_name == "resume_combine":
             await run_resume_combine_job(job_id, payload)
-            return
-        if agent_name == "resume_sync":
-            await run_resume_sync_job(job_id, payload)
             return
         if agent_name != "resume_parse":
             raise ValueError(f"Unsupported background agent: {agent_name}")
