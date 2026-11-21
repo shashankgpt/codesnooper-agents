@@ -54,6 +54,7 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
         persist_profile_and_complete_job,
         run_portfolio_generate_job,
         run_resume_combine_job,
+        run_resume_generate_job,
         run_resume_sync_job,
     )
     from app.models.resume import ResumeParseRequest
@@ -61,17 +62,21 @@ async def run_agent_task(task_id: str, agent_name: str, payload: dict[str, Any])
 
     firebase_service.initialize()
     path = f"resume_parse_jobs/{task_id}"
-    await firebase_service.async_merge(
-        path,
-        {"status": "processing", "updated_at": datetime.now(UTC).isoformat()},
-    )
     try:
+        if agent_name == "resume_sync":
+            result = await run_resume_sync_job(task_id, payload)
+            return result
+
+        await firebase_service.async_merge(
+            path,
+            {"status": "processing", "updated_at": datetime.now(UTC).isoformat()},
+        )
         if agent_name == "portfolio_generate":
             result = await run_portfolio_generate_job(task_id, payload)
+        elif agent_name == "resume_generate":
+            result = await run_resume_generate_job(task_id, payload)
         elif agent_name == "resume_combine":
             result = await run_resume_combine_job(task_id, payload)
-        elif agent_name == "resume_sync":
-            result = await run_resume_sync_job(task_id, payload)
         elif agent_name == "resume_parse":
             request = ResumeParseRequest.model_validate(payload)
             response = await ResumeController(get_settings()).parse_resume(request)
